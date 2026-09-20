@@ -11,11 +11,10 @@ Por decisión explícita del dueño de los datos, esta app **ya no pide iniciar 
 
 El código ya trae protecciones listas pero **inactivas hasta que las configures** (para no romper nada por sorpresa). Ninguna de estas requiere volver a pedir login:
 
-1. **App Check (recomendado, es el reemplazo real del login para bloquear acceso ajeno)**
-   - Firebase Console → Project Settings → App Check → Apps → esta app web → Registrar → proveedor **reCAPTCHA v3** → copiar la site key.
-   - Pegarla en `js/firebase-init.js`, constante `APP_CHECK_SITE_KEY` (reemplaza `PEGA_AQUI_TU_RECAPTCHA_SITE_KEY`).
-   - Desplegar la app y esperar unos días viendo en Firebase Console → App Check → Apps cómo sube el % de peticiones "verificadas".
-   - Solo cuando ese % esté alto, activar App Check → APIs → Cloud Firestore → **Enforce**. Esto es lo que realmente bloquea a cualquiera que no use esta app — y se puede revertir con un clic desde ahí mismo si algo falla. Firestore rules no se toca para esto.
+1. **App Check (recomendado, es el reemplazo real del login para bloquear acceso ajeno) — YA REGISTRADO**
+   - App web registrada en Firebase Console → App Check con proveedor **reCAPTCHA Enterprise** (Firebase ya no ofrece reCAPTCHA v3 clásico para apps nuevas). La site key ya está en `js/firebase-init.js` (`APP_CHECK_SITE_KEY`).
+   - Falta: esperar unos días usando la app con normalidad y viendo en Firebase Console → App Check → Apps cómo sube el % de peticiones "verificadas".
+   - Solo cuando ese % esté alto, activar App Check → APIs → Cloud Firestore → **Enforce**. Esto es lo que realmente bloquea a cualquiera que no use esta app — y se puede revertir con un toque desde ahí mismo si algo falla. Firestore rules no se toca para esto.
 
 2. **Endpoint `exportManual` protegido con secreto** (ya en el código)
    - `firebase functions:secrets:set EXPORT_MANUAL_TOKEN` (cualquier valor largo/aleatorio).

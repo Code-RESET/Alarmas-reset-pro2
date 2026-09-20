@@ -8,7 +8,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot, orderBy, query, limit, getDocs, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getMessaging, getToken, isSupported, onMessage } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js";
-import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check.js";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check.js";
 
 // ══════════════════════════════════════════════════
 // 🔥 CONFIGURACIÓN FIREBASE — REEMPLAZA CON TUS DATOS
@@ -27,14 +27,13 @@ const firebaseConfig = {
 // "Certificados push web" → Generar par de claves. Pega aquí la clave pública.
 const VAPID_KEY = 'PEGA_AQUI_TU_VAPID_KEY';
 // 🛡️ APP CHECK — evita que scripts ajenos usen esta config de Firebase fuera
-// de esta app. Genera la clave en: Firebase Console → Project Settings →
-// App Check → Apps → esta app web → Registrar → reCAPTCHA v3. Mientras esta
-// clave siga con el valor de abajo, App Check NO se inicializa — cero riesgo de
-// romper la app hasta que la configures a propósito. Configurarla sola no
-// bloquea nada: el bloqueo real solo empieza cuando actives "Enforce" para
-// Firestore en Firebase Console → App Check → APIs, paso que puedes revertir
-// en cualquier momento desde ahí mismo si algo falla.
-const APP_CHECK_SITE_KEY = 'PEGA_AQUI_TU_RECAPTCHA_SITE_KEY';
+// de esta app. Registrada en Firebase Console → App Check → app web →
+// reCAPTCHA Enterprise (Firebase ya no ofrece reCAPTCHA v3 clásico para
+// apps nuevas). Configurarla aquí NO bloquea nada todavía — el bloqueo real
+// solo empieza cuando se active "Enforce" para Firestore en Firebase
+// Console → App Check → APIs, paso reversible con un toque en cualquier
+// momento desde ahí mismo si algo falla.
+const APP_CHECK_SITE_KEY = '6Lc66MUtAAAAAAzD3qsjDRaEV8o-T3l9RFB4D4DG';
 const fbConfigured = firebaseConfig.apiKey && !String(firebaseConfig.apiKey).includes('TU_')
   && firebaseConfig.projectId && !String(firebaseConfig.projectId).includes('TU_');
 window._useFirebase = false;
@@ -53,7 +52,7 @@ if (fbConfigured) {
     if (!String(APP_CHECK_SITE_KEY).includes('PEGA_AQUI')) {
       try {
         initializeAppCheck(app, {
-          provider: new ReCaptchaV3Provider(APP_CHECK_SITE_KEY),
+          provider: new ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
           isTokenAutoRefreshEnabled: true
         });
       } catch(e) {
