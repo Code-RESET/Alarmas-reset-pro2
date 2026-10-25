@@ -2638,10 +2638,20 @@ function abrirModalAbono(id) {
   document.getElementById('modal-cliente').classList.add('open');
 }
 
+let _guardandoAbono = false;
 async function submitAbono(id) {
-  const monto = parseFloat(document.getElementById('abono-monto')?.value);
-  const ok = await abonarOrden(id, monto);
-  if (ok) cerrarModalCliente();
+  // Misma protección que _guardandoOrden en submitOrden(): evita registrar
+  // el abono dos veces si se toca "Registrar abono" varias veces rápido
+  // antes de que la primera llamada termine (común con señal lenta).
+  if (_guardandoAbono) return;
+  _guardandoAbono = true;
+  try {
+    const monto = parseFloat(document.getElementById('abono-monto')?.value);
+    const ok = await abonarOrden(id, monto);
+    if (ok) cerrarModalCliente();
+  } finally {
+    _guardandoAbono = false;
+  }
 }
 
 async function abonarOrden(id, monto) {
