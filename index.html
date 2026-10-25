@@ -1406,20 +1406,31 @@ function buildClienteFormHTML(c) {
   </div>`;
 }
 
+let _guardandoCliente = false;
 async function submitCliente() {
-  const nombre = document.getElementById('cl-nombre')?.value?.trim();
-  if (!nombre) { toast('⚠️ El nombre es obligatorio'); return; }
-  const cliente = {
-    nombre,
-    telefono: document.getElementById('cl-telefono')?.value?.trim() || '',
-    email: document.getElementById('cl-email')?.value?.trim() || '',
-    notas: document.getElementById('cl-notas')?.value?.trim() || '',
-    fecha_creacion: Date.now()
-  };
-  if (editandoClienteId) cliente.id = editandoClienteId;
-  await guardarCliente(cliente);
-  toast('✅ Cliente guardado');
-  cerrarModalCliente();
+  // Misma protección que _guardandoOrden/_guardandoAbono: sin esto, tocar
+  // "Guardar" dos veces rápido al crear un cliente nuevo (sin editandoClienteId)
+  // creaba dos clientes duplicados, porque guardarCliente() usa addDoc()
+  // cuando no hay id.
+  if (_guardandoCliente) return;
+  _guardandoCliente = true;
+  try {
+    const nombre = document.getElementById('cl-nombre')?.value?.trim();
+    if (!nombre) { toast('⚠️ El nombre es obligatorio'); return; }
+    const cliente = {
+      nombre,
+      telefono: document.getElementById('cl-telefono')?.value?.trim() || '',
+      email: document.getElementById('cl-email')?.value?.trim() || '',
+      notas: document.getElementById('cl-notas')?.value?.trim() || '',
+      fecha_creacion: Date.now()
+    };
+    if (editandoClienteId) cliente.id = editandoClienteId;
+    await guardarCliente(cliente);
+    toast('✅ Cliente guardado');
+    cerrarModalCliente();
+  } finally {
+    _guardandoCliente = false;
+  }
 }
 
 function verClienteDetalle(id) {
