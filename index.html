@@ -3015,9 +3015,20 @@ async function checkAndRotateMonthOrders(_intentos) {
   const mesActual = _getMesActual();
   const ultimoMes = localStorage.getItem(ORDENES_MES_KEY);
   if (ultimoMes === mesActual) return;
+  // FIX: antes se archivaba CUALQUIER orden PAGADA/TERMO sin importar su
+  // fecha. Como ORDENES_MES_KEY vive en localStorage (por dispositivo, no
+  // compartido), si este chequeo se disparaba otra vez en un celular que
+  // nunca había "marcado" el mes actual (caché borrada, PWA reinstalada,
+  // dispositivo nuevo), se llevaba al archivo órdenes PAGADAS de ESTE mes
+  // también -- desapareciendo de la lista activa y del Dashboard órdenes
+  // recién hechas, exactamente como si "no se hubieran guardado". Ahora
+  // solo se archivan órdenes cuya propia fecha es de un mes anterior.
   const archivables = ordenes.filter(o => {
     const e = (o.estado||'').toUpperCase();
-    return e === 'PAGADO' || e === 'TERMO';
+    if (e !== 'PAGADO' && e !== 'TERMO') return false;
+    const fechaOrden = o.fecha_instalacion || (o.fecha_creacion ? new Date(o.fecha_creacion).toISOString() : '');
+    const mesOrden = (fechaOrden || '').slice(0, 7);
+    return mesOrden && mesOrden < mesActual;
   });
   if (!archivables.length) {
     localStorage.setItem(ORDENES_MES_KEY, mesActual);
