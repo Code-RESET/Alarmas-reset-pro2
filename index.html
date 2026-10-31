@@ -89,6 +89,8 @@
 <script type="module" src="js/data-ordenes.js"></script>
 <!-- MÓDULO data-clientes.js: carga/guardado/eliminación de clientes. -->
 <script type="module" src="js/data-clientes.js"></script>
+<!-- MÓDULO data-gastos.js: carga/guardado/eliminación de gastos de materiales. -->
+<script type="module" src="js/data-gastos.js"></script>
 
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#ff6b35">
@@ -419,6 +421,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-si
   <button class="sidebar-item" id="si-clientes" onclick="navTo('clientes')">
     <span class="si-icon">👤</span><span class="si-label">Clientes</span>
   </button>
+  <button class="sidebar-item" id="si-gastos" onclick="navTo('gastos')">
+    <span class="si-icon">🧰</span><span class="si-label">Gastos</span>
+  </button>
 
   <div class="sidebar-section-label">HERRAMIENTAS</div>
   <button class="sidebar-item" onclick="exportarExcel()">
@@ -506,6 +511,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-si
     <div class="stat-card orange" onclick="irADashCard('POR_COBRAR')"><div class="stat-label">Por Cobrar</div><div class="stat-value" id="stat-pendiente">$0</div></div>
     <div class="stat-card yellow" onclick="irADashCard('todos')"><div class="stat-label">Facturado</div><div class="stat-value" id="stat-total">$0</div></div>
     <div class="stat-card red" onclick="irADashCard('POR_COBRAR')"><div class="stat-label">Órdenes Pend.</div><div class="stat-value" id="stat-ordpend">0</div></div>
+    <div class="stat-card red" onclick="navTo('gastos')"><div class="stat-label">Gastos del mes</div><div class="stat-value" id="stat-gastos-mes">$0</div></div>
+    <div class="stat-card green" onclick="navTo('gastos')"><div class="stat-label">Ganancia neta (mes)</div><div class="stat-value" id="stat-ganancia-neta">$0</div></div>
   </div>
   <div class="historial-section" id="historial-section" style="display:none">
     <div style="font-family:var(--font-display);font-weight:700;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px">📦 Historial de meses</div>
@@ -549,6 +556,13 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-si
     <button class="btn btn-ghost" onclick="fusionarClientesDuplicados()">🔧 Fusionar duplicados</button>
   </div>
   <div id="clientes-lista"></div>
+</div>
+
+<!-- GASTOS (materiales generales: herramientas, cable, terminales, cinta, etc.) -->
+<div class="view" id="tab-gastos">
+  <div style="font-family:var(--font-display);font-weight:700;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px" id="gastos-total-mes">Total este mes: $0</div>
+  <button class="btn btn-primary" style="width:100%;margin-bottom:16px" onclick="abrirModalGasto()">+ Nuevo gasto</button>
+  <div id="gastos-lista"></div>
 </div>
 
 <!-- FAB -->
@@ -699,12 +713,14 @@ var ordenes = [];
 const ORDENES_LIMIT_SEGURIDAD = 1500;
 window.ORDENES_LIMIT_SEGURIDAD = ORDENES_LIMIT_SEGURIDAD;
 var clientes = [];
+var gastos = [];
 // Agenda/citas se eliminó definitivamente (ago-2026) — antes vivía aquí
 // 'var citas = []' junto con su estado asociado.
 let filtroEstado = 'todos';
 let vistaAgrupada = true;
 let editandoId = null;
 let editandoClienteId = null;
+let editandoGastoId = null;
 let cotFolioNum = parseInt(localStorage.getItem('cot_folio') || '1');
 let cotFolioRegistrado = false;
 /** 'modal' | 'nueva' — evita IDs duplicados entre pestaña y modal */
@@ -846,6 +862,117 @@ function _calcFinancialSummary(lista) {
     if(est==='PENDIENTE'||est==='EN_PROCESO') porCobrar+=t-a;
   });
   return { totalFac, totalGan, porCobrar };
+}
+
+// ═══════════════════════════════════════
+// GASTOS — relación con la ganancia del mes actual
+// ═══════════════════════════════════════
+function _mesDeFecha(fechaMs) {
+  return fechaMs ? new Date(fechaMs).toISOString().slice(0,7) : '';
+}
+// Ganancia (costo-inversión) de las órdenes cuya propia fecha cae en el mes
+// actual. Deliberadamente distinta de "Ganancia Total" del dashboard (que
+// suma TODAS las órdenes activas sin filtrar por fecha) para poder comparar
+// manzanas con manzanas contra "Gastos del mes", que sí está filtrado por mes.
+function _gananciaDelMesActual() {
+  const mesActual = _getMesActual();
+  let gan = 0;
+  ordenes.forEach(o => {
+    const fechaOrden = o.fecha_instalacion || (o.fecha_creacion ? new Date(o.fecha_creacion).toISOString() : '');
+    if ((fechaOrden||'').slice(0,7) !== mesActual) return;
+    gan += (o.productos||[]).reduce((s,p)=>s+(parseFloat(p.costo)||0)-(parseFloat(p.inversion)||0),0);
+  });
+  return gan;
+}
+function _gastosDelMesActual() {
+  const mesActual = _getMesActual();
+  return (window.gastos||[]).filter(g => _mesDeFecha(g.fecha) === mesActual)
+    .reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
+}
+function actualizarResumenGastosMes() {
+  const gastosMes = _gastosDelMesActual();
+  const elG = document.getElementById('stat-gastos-mes');
+  const elN = document.getElementById('stat-ganancia-neta');
+  const elTotalTab = document.getElementById('gastos-total-mes');
+  if (elG) elG.textContent = fmt(gastosMes);
+  if (elN) elN.textContent = fmt(_gananciaDelMesActual() - gastosMes);
+  if (elTotalTab) elTotalTab.textContent = 'Total este mes: ' + fmt(gastosMes);
+}
+
+function renderGastos() {
+  const cont = document.getElementById('gastos-lista');
+  if (cont) {
+    const lista = (window.gastos||[]).slice().sort((a,b)=>(b.fecha||0)-(a.fecha||0));
+    cont.innerHTML = lista.length
+      ? lista.map(g => gastoCard(g)).join('')
+      : '<div class="empty"><div class="empty-icon">🧰</div><div class="empty-text">Aún no registras gastos de materiales — herramientas, cable, terminales, cinta, etc.</div></div>';
+  }
+  actualizarResumenGastosMes();
+}
+
+function gastoCard(g) {
+  const fechaStr = g.fecha ? new Date(g.fecha).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}) : '';
+  return `<div class="orden-card">
+    <div class="orden-header">
+      <div><div class="orden-title">🧰 ${esc(g.concepto||'—')}</div>
+      <div class="orden-sub">${fechaStr}</div></div>
+      <span class="estado-badge pendiente">${fmt(g.monto||0)}</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="abrirModalGasto('${g.id}')">✏️ Editar</button>
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="eliminarGasto('${g.id}')">🗑️ Eliminar</button>
+    </div>
+  </div>`;
+}
+
+function abrirModalGasto(id) {
+  editandoGastoId = id || null;
+  const g = id ? (window.gastos||[]).find(x=>x.id===id) : null;
+  document.getElementById('modal-cliente-title').textContent = g ? 'Editar gasto' : 'Nuevo gasto';
+  document.getElementById('modal-cliente-body').innerHTML = buildGastoFormHTML(g);
+  document.getElementById('modal-cliente').classList.add('open');
+}
+
+function buildGastoFormHTML(g) {
+  const o = g || {};
+  const fechaVal = o.fecha ? new Date(o.fecha).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
+  return `
+  <div class="form-row">
+    <div class="form-group"><label class="form-label">¿Qué compraste? *</label>
+      <input class="form-input" id="ga-concepto" placeholder="Ej. Cable rojo 10m, terminales, cinta aislante" value="${esc(o.concepto||'')}"></div>
+  </div>
+  <div class="form-row cols-2" style="margin-bottom:20px">
+    <div class="form-group"><label class="form-label">Monto *</label>
+      <input class="form-input" id="ga-monto" type="number" step="0.01" min="0.01" placeholder="0" value="${o.monto||''}"></div>
+    <div class="form-group"><label class="form-label">Fecha</label>
+      <input class="form-input" id="ga-fecha" type="date" value="${fechaVal}"></div>
+  </div>
+  <div style="display:flex;gap:10px">
+    <button class="btn btn-primary" style="flex:1" onclick="submitGasto()">💾 Guardar</button>
+    <button class="btn btn-ghost" onclick="cerrarModalCliente()">Cancelar</button>
+  </div>`;
+}
+
+let _guardandoGasto = false;
+async function submitGasto() {
+  // Misma protección contra doble toque que submitCliente()/submitAbono().
+  if (_guardandoGasto) return;
+  _guardandoGasto = true;
+  try {
+    const concepto = document.getElementById('ga-concepto')?.value?.trim();
+    const monto = parseFloat(document.getElementById('ga-monto')?.value);
+    const fechaStr = document.getElementById('ga-fecha')?.value;
+    if (!concepto) { toast('⚠️ Escribe qué compraste'); return; }
+    if (!monto || monto <= 0) { toast('⚠️ Ingresa un monto válido'); return; }
+    const fecha = fechaStr ? new Date(fechaStr + 'T12:00:00').getTime() : Date.now();
+    const gasto = { concepto, monto, fecha };
+    if (editandoGastoId) gasto.id = editandoGastoId;
+    await guardarGasto(gasto);
+    toast('✅ Gasto guardado');
+    cerrarModalCliente();
+  } finally {
+    _guardandoGasto = false;
+  }
 }
 async function _ensureXLSX() {
   if (typeof XLSX !== 'undefined') return;
@@ -1134,6 +1261,7 @@ function showTab(id, btn) {
     setTimeout(recalcCot, 0);
   }
   if (id==='clientes') renderClientes();
+  if (id==='gastos') renderGastos();
 }
 
 // ═══════════════════════════════════════
@@ -1147,6 +1275,7 @@ function renderDashboard() {
   document.getElementById('stat-pendiente').textContent=fmt(porCobrar);
   document.getElementById('stat-total').textContent=fmt(totalFac);
   document.getElementById('stat-ordpend').textContent=pend;
+  actualizarResumenGastosMes();
   renderHistorialOrdenes();
 }
 
@@ -1381,6 +1510,7 @@ function cerrarModalCliente() {
   document.getElementById('modal-cliente').classList.remove('open');
   document.getElementById('modal-cliente-body').innerHTML = '';
   editandoClienteId = null;
+  editandoGastoId = null;
 }
 
 function buildClienteFormHTML(c) {
@@ -2055,6 +2185,7 @@ function initAppData() {
   updateFirebaseBadge();
   cargarOrdenes();
   cargarClientes();
+  cargarGastos();
   cargarHistorialOrdenes();
   setTimeout(checkAndRotateMonthOrders, 1200);
   setTimeout(initOnboarding, 800);
@@ -2129,6 +2260,7 @@ window.addEventListener('firebaseReady', () => {
     // nuevo aquí es seguro, no duplica listeners.
     cargarOrdenes();
     cargarClientes();
+    cargarGastos();
   }
 });
 document.addEventListener('DOMContentLoaded', () => {
