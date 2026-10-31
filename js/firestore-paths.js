@@ -45,6 +45,16 @@ function colArchivados() {
   const { collection } = window._firebaseModules;
   return collection(window._firebaseDb, 'usuarios', window._uid, 'ordenes_archivadas');
 }
+// Gastos de materiales generales (herramientas, cable, terminales, etc.) —
+// no van ligados a una orden específica. Mismo patrón que colClientes().
+function colGastos() {
+  const { collection } = window._firebaseModules;
+  return collection(window._firebaseDb, 'usuarios', window._uid, 'gastos');
+}
+function docGasto(id) {
+  const { doc } = window._firebaseModules;
+  return doc(window._firebaseDb, 'usuarios', window._uid, 'gastos', id);
+}
 
 // Exponer en window para que index.html (script clásico) las siga usando
 // como funciones globales, exactamente igual que antes de modularizar.
@@ -56,3 +66,5 @@ window.docCliente = docCliente;
 window.colCitas = colCitas;
 window.docCita = docCita;
 window.colArchivados = colArchivados;
+window.colGastos = colGastos;
+window.docGasto = docGasto;
