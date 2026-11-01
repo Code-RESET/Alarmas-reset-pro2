@@ -511,6 +511,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-si
     <div class="stat-card orange" onclick="irADashCard('POR_COBRAR')"><div class="stat-label">Por Cobrar</div><div class="stat-value" id="stat-pendiente">$0</div></div>
     <div class="stat-card yellow" onclick="irADashCard('todos')"><div class="stat-label">Facturado</div><div class="stat-value" id="stat-total">$0</div></div>
     <div class="stat-card red" onclick="irADashCard('POR_COBRAR')"><div class="stat-label">Órdenes Pend.</div><div class="stat-value" id="stat-ordpend">0</div></div>
+    <div class="stat-card yellow" onclick="irADashCard('todos')"><div class="stat-label">Facturado (mes)</div><div class="stat-value" id="stat-facturado-mes">$0</div></div>
     <div class="stat-card red" onclick="navTo('gastos')"><div class="stat-label">Gastos del mes</div><div class="stat-value" id="stat-gastos-mes">$0</div></div>
     <div class="stat-card green" onclick="navTo('gastos')"><div class="stat-label">Ganancia neta (mes)</div><div class="stat-value" id="stat-ganancia-neta">$0</div></div>
   </div>
@@ -889,13 +890,30 @@ function _gastosDelMesActual() {
   return (window.gastos||[]).filter(g => _mesDeFecha(g.fecha) === mesActual)
     .reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
 }
+// "Facturado" del dashboard suma TODAS las órdenes activas sin filtrar por
+// fecha (igual que _calcFinancialSummary, sin tocarla) — por eso el día 1
+// de un mes nuevo sigue mostrando montos grandes que en realidad son deuda
+// pendiente de meses anteriores, no ventas nuevas. Esta versión sí filtra
+// por el mes actual, para responder directo "¿ya vendí algo este mes?".
+function _facturadoDelMesActual() {
+  const mesActual = _getMesActual();
+  let fac = 0;
+  ordenes.forEach(o => {
+    const fechaOrden = o.fecha_instalacion || (o.fecha_creacion ? new Date(o.fecha_creacion).toISOString() : '');
+    if ((fechaOrden||'').slice(0,7) !== mesActual) return;
+    fac += o.total || 0;
+  });
+  return fac;
+}
 function actualizarResumenGastosMes() {
   const gastosMes = _gastosDelMesActual();
   const elG = document.getElementById('stat-gastos-mes');
   const elN = document.getElementById('stat-ganancia-neta');
+  const elF = document.getElementById('stat-facturado-mes');
   const elTotalTab = document.getElementById('gastos-total-mes');
   if (elG) elG.textContent = fmt(gastosMes);
   if (elN) elN.textContent = fmt(_gananciaDelMesActual() - gastosMes);
+  if (elF) elF.textContent = fmt(_facturadoDelMesActual());
   if (elTotalTab) elTotalTab.textContent = 'Total este mes: ' + fmt(gastosMes);
 }
 
