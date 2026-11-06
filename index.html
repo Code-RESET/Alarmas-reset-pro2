@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>RESET Alarmas y GPS — Control de Órdenes</title>
 <script>
+// Login pendiente desde el primer momento: el arranque de respaldo no debe
+// abrir la app en modo local mientras se carga el SDK de Firebase y se pide
+// el inicio de sesión. firebase-init lo apaga si Firebase no se usa.
+window._authPendiente = true;
+
 // Captura global: errores que antes se perdían sin aviso (lista vacía,
 // guardados fallidos) ahora al menos se muestran. Máx. un aviso cada 10 s.
 (function(){
@@ -91,21 +96,21 @@
 
 <!-- MÓDULO firebase-init.js: mismo comportamiento que antes, ahora en archivo
      aparte (js/firebase-init.js) para facilitar mantenimiento. -->
-<script type="module" src="js/firebase-init.js?v=19"></script>
+<script type="module" src="js/firebase-init.js?v=21"></script>
 <!-- MÓDULO firestore-paths.js: rutas de colecciones/documentos de Firestore,
      expuestas como funciones globales (window.colOrdenes, etc.) para que el
      resto del código las siga usando sin cambios. -->
-<script type="module" src="js/firestore-paths.js?v=19"></script>
+<script type="module" src="js/firestore-paths.js?v=21"></script>
 <!-- MÓDULO data-ordenes.js: carga/guardado/eliminación de órdenes.
      Depende de window.ordenes, window.IDB, window.renderAll, etc. — ver
      comentarios dentro del archivo. Debe cargar DESPUÉS de firebase-init.js
      y firestore-paths.js, aunque en la práctica no importa el orden exacto
      porque solo se usan dentro de funciones, no al cargar el módulo. -->
-<script type="module" src="js/data-ordenes.js?v=19"></script>
+<script type="module" src="js/data-ordenes.js?v=21"></script>
 <!-- MÓDULO data-clientes.js: carga/guardado/eliminación de clientes. -->
-<script type="module" src="js/data-clientes.js?v=19"></script>
+<script type="module" src="js/data-clientes.js?v=21"></script>
 <!-- MÓDULO data-gastos.js: carga/guardado/eliminación de gastos de materiales. -->
-<script type="module" src="js/data-gastos.js?v=19"></script>
+<script type="module" src="js/data-gastos.js?v=21"></script>
 
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#ff6b35">
@@ -463,6 +468,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-si
   <button class="sidebar-item" onclick="mostrarInfoFirebase()">
     <span class="si-icon">🔥</span><span class="si-label">Firebase</span>
     <span id="si-fb-dot" style="font-size:10px;color:var(--muted)">●</span>
+  </button>
+
+  <button class="sidebar-item" onclick="cerrarSesionApp()">
+    <span class="si-icon">🚪</span><span class="si-label">Cerrar sesión</span>
+    <span id="si-auth-email" style="font-size:10px;color:var(--muted);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
   </button>
 
   <button id="btn-instalar-pwa" class="sidebar-item" onclick="instalarPWA()" style="display:none;color:var(--green);border-top:1px solid var(--border);margin-top:4px">
@@ -2355,7 +2365,10 @@ window.addEventListener('firebaseReady', () => {
 });
 document.addEventListener('DOMContentLoaded', () => {
   // Respaldo: si por algún motivo 'firebaseReady' no llegó en 300ms, arranca igual
-  setTimeout(() => { if (!_appInitialized) { showApp(); _appInitialized = true; initAppData(); } }, 300);
+  // No arranca en modo local si se está esperando el inicio de sesión.
+  setTimeout(() => { if (!_appInitialized && !window._authPendiente) { showApp(); _appInitialized = true; initAppData(); } }, 300);
+  // Si el SDK de Firebase no cargó en absoluto (sin señal y sin caché), arrancar con la copia local.
+  setTimeout(() => { if (!_appInitialized && !window._firebaseInitRan) { showApp(); _appInitialized = true; initAppData(); } }, 8000);
   document.addEventListener('click', e => {
     if (e.target.closest('[data-action="add-servicio"]')) {
       e.preventDefault();
@@ -3201,6 +3214,17 @@ function respaldoJSON() {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   toast('✅ Respaldo JSON descargado');
 }
+
+async function cerrarSesionApp() {
+  closeSidebar();
+  if (typeof window.cerrarSesion !== 'function') { toast('No hay sesión iniciada'); return; }
+  const ok = await confirmarAccion('Cerrar sesión', '¿Cerrar sesión en este dispositivo? Necesitarás tu correo y contraseña (y señal) para volver a entrar.', '🚪', 'Cerrar sesión');
+  if (ok) window.cerrarSesion();
+}
+window.addEventListener('firebaseReady', () => {
+  const el = document.getElementById('si-auth-email');
+  if (el && window._authUser) el.textContent = window._authUser.email || '';
+});
 
 function restaurarJSON() {
   closeSidebar();

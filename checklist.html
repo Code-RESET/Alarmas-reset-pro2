@@ -13,6 +13,11 @@
 <link rel="icon" type="image/png" sizes="512x512" href="assets/icon-512.png">
 <title>RESET Alarmas y GPS — Cotizaciones</title>
 <script>
+// Login pendiente desde el primer momento: el arranque de respaldo no debe
+// abrir la app en modo local mientras se carga el SDK de Firebase y se pide
+// el inicio de sesión. firebase-init lo apaga si Firebase no se usa.
+window._authPendiente = true;
+
 // Captura global: errores que antes se perdían sin aviso (lista vacía,
 // guardados fallidos) ahora al menos se muestran. Máx. un aviso cada 10 s.
 (function(){
@@ -45,6 +50,7 @@
     query, orderBy, serverTimestamp,
     initializeFirestore, persistentLocalCache, persistentMultipleTabManager
   } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { protegerConLogin } from "./js/auth-gate.js?v=21";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAOUGIWvrPtdKf9pnoYlh3NIHHiBO_R7mE",
@@ -55,11 +61,15 @@
     appId: "1:1096561116547:web:b13df05c092785723aa2b6"
   };
 
-  // Sin login: todos los dispositivos comparten la misma ruta de datos
-  // (usuarios/compartido/...), igual que index.html — ver README.
+  // Misma ruta compartida que index.html (usuarios/compartido/...). El
+  // inicio de sesión se hace en index.html; aquí solo se verifica que haya
+  // sesión (se comparte entre páginas del mismo sitio) y si no, se redirige.
   window._uid = 'compartido';
+  window._firebaseInitRan = true;
+  let _app = null;
   try {
     const app = initializeApp(firebaseConfig);
+    _app = app;
     // Persistencia offline nativa de Firestore (igual que index.html), para
     // que el catálogo y las finanzas también se puedan leer sin internet.
     const db = initializeFirestore(app, {
@@ -72,7 +82,12 @@
     console.warn('Firebase no disponible:', e);
     window._fbReady = false;
   }
-  window.dispatchEvent(new Event('fbReady'));
+  if (window._fbReady && _app) {
+    protegerConLogin(_app, window._db, () => window.dispatchEvent(new Event('fbReady')), { redirigirA: 'index.html' });
+  } else {
+    window._authPendiente = false;
+    window.dispatchEvent(new Event('fbReady'));
+  }
 </script>
 <style>
 :root {
@@ -2314,8 +2329,11 @@ window.addEventListener('fbReady', () => {
   initFirebase();
 });
 setTimeout(() => {
-  if (!fbInitDone) { fbInitDone = true; initFirebase(); }
+  if (!fbInitDone && !window._authPendiente) { fbInitDone = true; initFirebase(); }
 }, 300);
+setTimeout(() => {
+  if (!fbInitDone && !window._firebaseInitRan) { fbInitDone = true; initFirebase(); }
+}, 8000);
 
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;

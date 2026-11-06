@@ -14,11 +14,27 @@ service cloud.firestore {
     match /export_logs/{document=**} {
       allow read, write: if false;
     }
-    // Sin inicio de sesión: todos los dispositivos comparten la misma ruta
-    // (usuarios/compartido/...), abierta a cualquiera que conozca el proyecto.
-    // Decisión explícita para evitar bloqueos de login (ver README).
+    // Lista de cuentas autorizadas: un documento por cuenta, con el UID de
+    // Firebase Authentication como ID (permitidos/{uid}). Se administra solo
+    // desde Firebase Console; ninguna app puede escribir aquí. Cada cuenta
+    // puede leer únicamente su propio documento (la app lo usa para mostrar
+    // "Cuenta sin acceso" en vez de una pantalla vacía).
+    match /permitidos/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    function autorizado() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/permitidos/$(request.auth.uid));
+    }
+
+    // Datos de la app: todos los dispositivos siguen compartiendo la misma
+    // ruta (usuarios/compartido/...), pero ahora solo con sesión iniciada y
+    // cuenta autorizada. Antes: `if true` (abierto a cualquiera en internet).
+    // Las Cloud Functions usan el Admin SDK y no pasan por estas reglas.
     match /usuarios/{document=**} {
-      allow read, write: if true;
+      allow read, write: if autorizado();
     }
   }
 }
