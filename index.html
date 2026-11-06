@@ -96,21 +96,21 @@ window._authPendiente = true;
 
 <!-- MÓDULO firebase-init.js: mismo comportamiento que antes, ahora en archivo
      aparte (js/firebase-init.js) para facilitar mantenimiento. -->
-<script type="module" src="js/firebase-init.js?v=21"></script>
+<script type="module" src="js/firebase-init.js?v=22"></script>
 <!-- MÓDULO firestore-paths.js: rutas de colecciones/documentos de Firestore,
      expuestas como funciones globales (window.colOrdenes, etc.) para que el
      resto del código las siga usando sin cambios. -->
-<script type="module" src="js/firestore-paths.js?v=21"></script>
+<script type="module" src="js/firestore-paths.js?v=22"></script>
 <!-- MÓDULO data-ordenes.js: carga/guardado/eliminación de órdenes.
      Depende de window.ordenes, window.IDB, window.renderAll, etc. — ver
      comentarios dentro del archivo. Debe cargar DESPUÉS de firebase-init.js
      y firestore-paths.js, aunque en la práctica no importa el orden exacto
      porque solo se usan dentro de funciones, no al cargar el módulo. -->
-<script type="module" src="js/data-ordenes.js?v=21"></script>
+<script type="module" src="js/data-ordenes.js?v=22"></script>
 <!-- MÓDULO data-clientes.js: carga/guardado/eliminación de clientes. -->
-<script type="module" src="js/data-clientes.js?v=21"></script>
+<script type="module" src="js/data-clientes.js?v=22"></script>
 <!-- MÓDULO data-gastos.js: carga/guardado/eliminación de gastos de materiales. -->
-<script type="module" src="js/data-gastos.js?v=21"></script>
+<script type="module" src="js/data-gastos.js?v=22"></script>
 
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#ff6b35">
@@ -2220,18 +2220,48 @@ function leerPartidas() {
   })).filter(p=>p.nombre && (p.precio >= 0));
 }
 
-function verCotizacion() {
+const _folioCot = n => 'COT-' + new Date().getFullYear() + '-' + String(n).padStart(3,'0');
+
+// Reserva el siguiente número de cotización en un contador compartido
+// (usuarios/compartido/contadores/cotizaciones). Antes el contador vivía en
+// el localStorage de cada teléfono y dos teléfonos generaban el mismo folio.
+// Sin señal se usa el contador local, como antes.
+async function _reservarFolioCot() {
+  if (window._useFirebase && window._firebaseDb && window._uid && navigator.onLine) {
+    try {
+      const { runTransaction, doc } = window._firebaseModules;
+      const ref = doc(window._firebaseDb, 'usuarios', window._uid, 'contadores', 'cotizaciones');
+      let n = 0;
+      await runTransaction(window._firebaseDb, async tx => {
+        const snap = await tx.get(ref);
+        // max con el contador local: al migrar no se repite ningún folio ya emitido en este teléfono
+        n = Math.max(((snap.exists() && snap.data().ultimo) || 0) + 1, cotFolioNum);
+        tx.set(ref, { ultimo: n, fecha: Date.now() });
+      });
+      cotFolioNum = n + 1; localStorage.setItem('cot_folio', cotFolioNum);
+      return n;
+    } catch(e) { console.warn('Folio compartido no disponible, se usa el local:', e); }
+  }
+  const n = cotFolioNum;
+  cotFolioNum++; localStorage.setItem('cot_folio', cotFolioNum);
+  return n;
+}
+
+async function verCotizacion() {
   const cliente=document.getElementById('c-cliente')?.value?.trim();
   if(!cliente){toast('⚠️ El nombre del cliente es obligatorio');return;}
   const nums=recalcCot();
   const partidas=leerPartidas();
-  const folio=document.getElementById('c-folio')?.value||'';
-  const fecha=document.getElementById('c-fecha')?.value||'';
-  const vigencia=document.getElementById('c-vigencia')?.value||'';
+  const folioEl=document.getElementById('c-folio');
   if (!cotFolioRegistrado) {
     cotFolioRegistrado = true;
-    cotFolioNum++; localStorage.setItem('cot_folio', cotFolioNum);
+    // Solo se asigna folio automático si el usuario no escribió uno propio.
+    if (folioEl && folioEl.value === folioEl.defaultValue) folioEl.value = _folioCot(await _reservarFolioCot());
+    else { cotFolioNum++; localStorage.setItem('cot_folio', cotFolioNum); }
   }
+  const folio=folioEl?.value||'';
+  const fecha=document.getElementById('c-fecha')?.value||'';
+  const vigencia=document.getElementById('c-vigencia')?.value||'';
 
   const bodyHTML =
     headerEmpresa('COTIZACIÓN', folio, fecha)
@@ -2843,9 +2873,34 @@ async function cambiarEstado(id, nuevoEstado) {
   orden.estado = nuevoEstado;
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
-      const { updateDoc } = window._firebaseModules;
+      const { updateDoc, runTransaction } = window._firebaseModules;
       renderAll();
-      const res = await window._fsEscribir(updateDoc(docOrden(id), { estado: nuevoEstado }));
+      let res = 'ok';
+      const ref = docOrden(id);
+      const estadoVisto = (estadoAnterior || 'PENDIENTE').toUpperCase();
+      try {
+        if (!navigator.onLine) throw Object.assign(new Error('offline'), { code: 'unavailable' });
+        // Con señal: solo se cambia si el servidor sigue en el estado que se
+        // veía en pantalla. Evita que una lista desactualizada revierta, por
+        // ejemplo, un Pagado que otro teléfono acaba de registrar.
+        await runTransaction(window._firebaseDb, async tx => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) throw new Error('ORDEN_NO_EXISTE');
+          const actual = (snap.data().estado || 'PENDIENTE').toUpperCase();
+          if (actual !== estadoVisto) throw Object.assign(new Error('ESTADO_CAMBIADO'), { actual });
+          tx.update(ref, { estado: nuevoEstado });
+        });
+      } catch(e) {
+        if (e.message === 'ESTADO_CAMBIADO') {
+          orden.estado = e.actual; renderAll();
+          toast('⚠️ Otro dispositivo ya cambió esta orden a ' + (ESTADO_LABELS[e.actual] || e.actual) + '. Revisa antes de cambiarla.');
+          return;
+        }
+        if (e.message === 'ORDEN_NO_EXISTE') { orden.estado = estadoAnterior; renderAll(); toast('⚠️ Esta orden ya no existe'); return; }
+        if (e.code !== 'unavailable' && e.code !== 'failed-precondition') throw e;
+        // Sin señal: se guarda en la cola persistente (sin verificación posible).
+        res = await window._fsEscribir(updateDoc(ref, { estado: nuevoEstado }));
+      }
       // El ingreso se registra solo después de que la escritura fue aceptada
       // (o quedó en la cola persistente), y _registrarIngresoOrden evita
       // contarlo dos veces si la orden se pasa a Pagado más de una vez.
@@ -3414,8 +3469,12 @@ async function archivarOrdenesDelMes(archivables) {
 async function cargarHistorialOrdenes() {
   if (window._useFirebase && window._firebaseDb && window._firebaseModules && window._uid) {
     try {
-      const { getDocs, query, orderBy } = window._firebaseModules;
-      const snap = await getDocs(query(colArchivados(), orderBy('mes','desc')));
+      const { getDocs, query, orderBy, where } = window._firebaseModules;
+      // Solo los últimos 12 meses (lo que muestra la sección de historial);
+      // antes se descargaba todo el archivo en cada arranque.
+      const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 12);
+      const desdeMes = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+      const snap = await getDocs(query(colArchivados(), where('mes', '>=', desdeMes), orderBy('mes','desc')));
       const remotos = snap.docs.map(d=>({id:d.id, ...d.data()}));
       const local = JSON.parse(localStorage.getItem(ORDENES_HIST_KEY)||'[]');
       const porMes = {};

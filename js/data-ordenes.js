@@ -52,8 +52,15 @@ async function cargarOrdenes() {
       const q = query(window.colOrdenes(), orderBy('fecha_creacion','desc'), limit(window.ORDENES_LIMIT_SEGURIDAD));
       if (!fsListenerStarted) {
         fsListenerStarted = true;
+        let avisadoTope = false;
         _unsubOrdenes = onSnapshot(q, snap => {
           window.ordenes = snap.docs.map(d=>({id:d.id,...d.data()}));
+          // Antes, al pasar el tope las órdenes más viejas desaparecían de la
+          // pantalla y de los totales sin ningún aviso.
+          if (snap.size >= window.ORDENES_LIMIT_SEGURIDAD && !avisadoTope) {
+            avisadoTope = true;
+            window.toast('⚠️ Hay ' + snap.size + '+ órdenes activas: las más antiguas no se muestran. Archiva las pagadas de meses anteriores.');
+          }
           window.renderAll();
           window._ordenesListas = true;
         }, err => {

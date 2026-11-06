@@ -57,3 +57,19 @@ La app funciona normalmente sin internet: lee la última copia conocida de los d
 - `checklist.html` (cotizaciones) todavía tenía el login de Google completo (pantalla de "Iniciar sesión", `getAuth`, `signInWithPopup`, etc.), a pesar de que ya no queda ningún flujo funcional para completarlo — quedaba bloqueando esa pantalla. Se quitó y ahora usa la misma ruta de datos compartida (`usuarios/compartido/...`) que el resto de la app, con persistencia offline igual que `index.html`.
 - Se eliminaron 3 funciones muertas (nunca llamadas): `resetPanelCompleto` y `_detenerListenersFirebase` en `checklist.html`, `_detenerListenersFirestore` en `index.html` — sobrantes del login que ya no existe.
 - Se eliminaron los íconos `icon-192.svg` e `icon-512.svg`, sin ninguna referencia en el proyecto (el manifest usa las versiones `.png`).
+
+## Pruebas
+
+En `tests/` (requiere Node 18+ y Java para los emuladores de Firebase):
+
+```bash
+cd tests
+npm install
+npx playwright install chromium   # solo la primera vez
+npm test
+```
+
+- `npm run test:functions` — utilidades de fecha de las Cloud Functions (no necesita emuladores).
+- `npm run test:emuladores` — levanta los emuladores de Auth y Firestore y corre:
+  - **Reglas** (`rules.test.mjs`): sin sesión o sin autorización no se lee ni escribe nada; `permitidos` no se puede editar desde la app.
+  - **Punta a punta** (`e2e.test.cjs`): la app real en Chromium — login, cuenta no autorizada, abonos por transacción, edición concurrente que conserva abonos, archivado, cambio de estado con verificación, folio de cotización compartido y redirección de `checklist.html`.

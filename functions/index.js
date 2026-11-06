@@ -69,18 +69,28 @@ const ESTADO_LABELS = {
   EN_PROCESO: 'En proceso'
 };
 
+// Fechas en zona del negocio, mes de cada orden y selección del reporte.
+const { TZ, fechaLocal, mesDeOrden, ordenesDelReporte, esUltimoDiaDelMes, sumarMeses } = require('./fechas');
+
 // ════════════════════════════════════════════════════════
-// FUNCIÓN PRINCIPAL — Exportación automática día 30
+// FUNCIÓN PRINCIPAL — Exportación automática el último día del mes
 // ════════════════════════════════════════════════════════
 exports.exportMensualM365 = onSchedule({
-  schedule: '0 8 30 * *',           // Día 30 de cada mes a las 8:00 AM
-  timeZone: 'America/Monterrey',
+  // Antes '0 8 30 * *': en febrero no hay día 30 y nunca se exportaba.
+  // Ahora corre los días 28-31 y solo trabaja si es el último día del mes.
+  schedule: '0 8 28-31 * *',
+  timeZone: TZ,
   retryCount: 3,                     // Reintentos automáticos ante fallo
   secrets: [AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, ONEDRIVE_USER_EMAIL]
 }, async (event) => {
   const db = getFirestore();
   const inicio = Date.now();
-  const mes = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  const hoy = fechaLocal();
+  if (!esUltimoDiaDelMes()) {
+    console.log(`${hoy} no es el último día del mes. Omitiendo.`);
+    return;
+  }
+  const mes = hoy.slice(0, 7); // "YYYY-MM" en hora de Monterrey
   const logRef = db.collection('export_logs').doc();
 
   // Verificar si ya se exportó este mes (evita duplicados en reintento)
@@ -115,10 +125,11 @@ exports.exportMensualM365 = onSchedule({
     // Ignora documentos sueltos que hayan quedado en /ordenes de nivel raíz
     // (colección antigua, previa a usuarios/{uid}/ordenes) — no tienen
     // documento padre, así que d.ref.parent.parent sería null.
-    const ordenes = snapshot.docs
+    const ordenes = ordenesDelReporte(snapshot.docs
       .filter(d => d.ref.parent.parent)
-      .map(d => ({ id: d.id, ...d.data() }));
-    console.log(`${ordenes.length} órdenes encontradas.`);
+      .map(d => ({ id: d.id, ...d.data() })), mes);
+    const delMes = ordenes.filter(o => mesDeOrden(o) === mes);
+    console.log(`${ordenes.length} órdenes en el reporte (${delMes.length} del mes).`);
 
     // 2. Construir archivo Excel
     console.log('Construyendo Excel...');
@@ -138,8 +149,8 @@ exports.exportMensualM365 = onSchedule({
       fecha_fin: Timestamp.now(),
       duracion_ms: Date.now() - inicio,
       ordenes_exportadas: ordenes.length,
-      total_facturado: ordenes.reduce((s, o) => s + (o.total || 0), 0),
-      ganancia: ordenes.reduce((s, o) =>
+      total_facturado: delMes.reduce((s, o) => s + (o.total || 0), 0),
+      ganancia: delMes.reduce((s, o) =>
         s + (o.productos || []).reduce((g, p) =>
           g + (parseFloat(p.costo) || 0) - (parseFloat(p.inversion) || 0), 0), 0)
     });
@@ -188,10 +199,10 @@ exports.exportManual = require('firebase-functions/v2/https').onRequest({
   try {
     const db = getFirestore();
     const snapshot = await db.collectionGroup('ordenes').orderBy('fecha_creacion', 'desc').get();
-    const ordenes = snapshot.docs
+    const mes = fechaLocal().slice(0, 7);
+    const ordenes = ordenesDelReporte(snapshot.docs
       .filter(d => d.ref.parent.parent)
-      .map(d => ({ id: d.id, ...d.data() }));
-    const mes = new Date().toISOString().slice(0, 7);
+      .map(d => ({ id: d.id, ...d.data() })), mes);
     const buffer = await buildExcel(ordenes, mes);
     const filename = `AlarmasReset-${mes}-manual.xlsx`;
     const fileUrl = await uploadToOneDrive(buffer, filename);
@@ -358,8 +369,10 @@ async function buildExcel(ordenes, mes) {
   ws3.getColumn(1).width = 32;
   ws3.getColumn(2).width = 24;
 
-  const totalFac = ordenes.reduce((s, o) => s + (o.total || 0), 0);
-  const totalGan = ordenes.reduce((s, o) =>
+  // Facturado y ganancia: solo órdenes del mes. "Por cobrar": todo saldo vivo.
+  const delMes = ordenes.filter(o => mesDeOrden(o) === mes);
+  const totalFac = delMes.reduce((s, o) => s + (o.total || 0), 0);
+  const totalGan = delMes.reduce((s, o) =>
     s + (o.productos || []).reduce((g, p) =>
       g + (parseFloat(p.costo) || 0) - (parseFloat(p.inversion) || 0), 0), 0);
   const porCobrar = ordenes
@@ -464,15 +477,9 @@ const GARANTIA_MESES = { 'GARANTIA 6 MESES': 6, 'GARANTIA 1 AÑO': 12 };
 const DIAS_AVISO_GARANTIA = 7;   // avisar cuando falten <= N días para vencer
 const DIAS_AVISO_COBRO = 15;     // avisar si el saldo lleva pendiente >= N días
 
-function sumarMeses(fechaStr, meses) {
-  const d = new Date(fechaStr + 'T00:00:00Z');
-  d.setUTCMonth(d.getUTCMonth() + meses);
-  return d;
-}
-
 exports.notificarPendientes = onSchedule({
   schedule: '0 9 * * *', // todos los días a las 9:00 AM
-  timeZone: 'America/Monterrey'
+  timeZone: TZ
 }, async () => {
   const db = getFirestore();
   const hoy = new Date();
