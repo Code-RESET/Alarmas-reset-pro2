@@ -839,6 +839,11 @@ window.IDB = IDB;
 // ═══════════════════════════════════════
 function fmt(n){ return '$'+(parseFloat(n)||0).toLocaleString('es-MX',{minimumFractionDigits:0,maximumFractionDigits:0}); }
 function esc(s){ if(s==null)return''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;').replace(/\//g,'&#x2F;'); }
+// Argumento seguro para handlers inline (onclick="fn(${jsa(x)})"): el navegador
+// decodifica entidades HTML antes de ejecutar el JS, así que esc() solo no basta.
+function jsa(v){ return esc(JSON.stringify(v==null?null:v)); }
+// Hash corto y estable para IDs de DOM derivados de texto libre (admite emoji).
+function hashId(s){ let h=5381; s=String(s); for(let i=0;i<s.length;i++){ h=((h<<5)+h+s.charCodeAt(i))|0; } return (h>>>0).toString(36); }
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2800); }
 function renderAll(){
   renderDashboard(); renderOrdenes(); updateSidebarStatus();
@@ -937,8 +942,8 @@ function gastoCard(g) {
       <span class="estado-badge pendiente">${fmt(g.monto||0)}</span>
     </div>
     <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="abrirModalGasto('${g.id}')">✏️ Editar</button>
-      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="eliminarGasto('${g.id}')">🗑️ Eliminar</button>
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="abrirModalGasto(${jsa(g.id)})">✏️ Editar</button>
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="eliminarGasto(${jsa(g.id)})">🗑️ Eliminar</button>
     </div>
   </div>`;
 }
@@ -961,9 +966,9 @@ function buildGastoFormHTML(g) {
   </div>
   <div class="form-row cols-2" style="margin-bottom:20px">
     <div class="form-group"><label class="form-label">Monto *</label>
-      <input class="form-input" id="ga-monto" type="number" step="0.01" min="0.01" placeholder="0" value="${o.monto||''}"></div>
+      <input class="form-input" id="ga-monto" type="number" step="0.01" min="0.01" placeholder="0" value="${esc(o.monto||'')}"></div>
     <div class="form-group"><label class="form-label">Fecha</label>
-      <input class="form-input" id="ga-fecha" type="date" value="${fechaVal}"></div>
+      <input class="form-input" id="ga-fecha" type="date" value="${esc(fechaVal)}"></div>
   </div>
   <div style="display:flex;gap:10px">
     <button class="btn btn-primary" style="flex:1" onclick="submitGasto()">💾 Guardar</button>
@@ -1047,7 +1052,7 @@ function abrirDoc(titulo, bodyHTML) {
   // Construir HTML completo con estilos
   _docHTML = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
     + '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    + '<title>' + titulo + ' — RESET Alarmas y GPS</title>'
+    + '<title>' + esc(titulo) + ' — RESET Alarmas y GPS</title>'
     + '<style>' + DOC_CSS + '</style>'
     + '</head><body>' + bodyHTML + '</body></html>';
 
@@ -1387,12 +1392,12 @@ function renderPorCliente(lista) {
     const ords = grupos[nombre];
     const saldoPend = ords.filter(o=>(o.estado||'').toUpperCase()==='PENDIENTE')
       .reduce((s,o)=>s+(o.total||0)-(o.a_cuenta_total||0), 0);
-    const groupId = 'cg_' + btoa(nombre).replace(/[^a-zA-Z0-9]/g,'').slice(0,12);
+    const groupId = 'cg_' + hashId(nombre);
     const badgePend = saldoPend > 0
       ? `<span class="cg-badge pending">Por cobrar ${fmt(saldoPend)}</span>`
       : `<span class="cg-badge ok">✓ Al corriente</span>`;
     return `<div class="cliente-group">
-      <div class="cliente-group-header" onclick="toggleClienteGroup('${groupId}')">
+      <div class="cliente-group-header" onclick="toggleClienteGroup(${jsa(groupId)})">
         <div class="cliente-group-name"><span class="icon">👤</span><span class="nombre">${esc(nombre)}</span></div>
         <div class="cliente-group-stats">
           <span class="cg-badge count">${ords.length} orden${ords.length!==1?'es':''}</span>
@@ -1432,29 +1437,29 @@ function ordenCard(o) {
   const estadoPicker = archivada ? '' : `
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:5px;margin-top:12px">Cambiar estado</div>
       <div class="estado-picker">
-        <button class="estado-opt pendiente ${est==='PENDIENTE'?'sel':''}" onclick="cambiarEstado('${o.id}','PENDIENTE')">Pendiente</button>
-        <button class="estado-opt en_proceso ${est==='EN_PROCESO'?'sel':''}" onclick="cambiarEstado('${o.id}','EN_PROCESO')">En proceso</button>
-        <button class="estado-opt pagado ${est==='PAGADO'?'sel':''}" onclick="cambiarEstado('${o.id}','PAGADO')">Pagado</button>
-        <button class="estado-opt termo ${est==='TERMO'?'sel':''}" onclick="cambiarEstado('${o.id}','TERMO')">Termo</button>
+        <button class="estado-opt pendiente ${est==='PENDIENTE'?'sel':''}" onclick="cambiarEstado(${jsa(o.id)},'PENDIENTE')">Pendiente</button>
+        <button class="estado-opt en_proceso ${est==='EN_PROCESO'?'sel':''}" onclick="cambiarEstado(${jsa(o.id)},'EN_PROCESO')">En proceso</button>
+        <button class="estado-opt pagado ${est==='PAGADO'?'sel':''}" onclick="cambiarEstado(${jsa(o.id)},'PAGADO')">Pagado</button>
+        <button class="estado-opt termo ${est==='TERMO'?'sel':''}" onclick="cambiarEstado(${jsa(o.id)},'TERMO')">Termo</button>
       </div>`;
   const acciones = archivada
-    ? `<div class="orden-actions"><button class="btn btn-green btn-sm" onclick="verBoleta('${o.id}')">🧾 Boleta</button></div>`
+    ? `<div class="orden-actions"><button class="btn btn-green btn-sm" onclick="verBoleta(${jsa(o.id)})">🧾 Boleta</button></div>`
     : `<div class="orden-actions">
-        <button class="btn btn-green btn-sm" onclick="verBoleta('${o.id}')">🧾 Boleta</button>
-        ${saldo>0 ? `<button class="btn btn-primary btn-sm" onclick="abrirModalAbono('${o.id}')">💰 Abonar</button>` : ''}
-        <button class="btn btn-ghost btn-sm" onclick="editarOrden('${o.id}')">✏️ Editar</button>
-        <button class="btn btn-danger btn-sm" onclick="eliminarOrden('${o.id}')">🗑️ Borrar</button>
+        <button class="btn btn-green btn-sm" onclick="verBoleta(${jsa(o.id)})">🧾 Boleta</button>
+        ${saldo>0 ? `<button class="btn btn-primary btn-sm" onclick="abrirModalAbono(${jsa(o.id)})">💰 Abonar</button>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="editarOrden(${jsa(o.id)})">✏️ Editar</button>
+        <button class="btn btn-danger btn-sm" onclick="eliminarOrden(${jsa(o.id)})">🗑️ Borrar</button>
       </div>`;
-  return `<div class="orden-card" id="ord-${o.id}">
-    <div class="orden-header" onclick="toggleOrden('${o.id}')">
+  return `<div class="orden-card" id="ord-${esc(o.id)}">
+    <div class="orden-header" onclick="toggleOrden(${jsa(o.id)})">
       <div><div class="orden-title">${esc(o.vehiculo||'—')} · <span style="color:var(--muted)">${esc(o.cliente||'—')}</span></div>
       <div class="orden-sub">${prods.length} servicio(s) · 📅 ${esc(o.fecha_instalacion||'sin fecha')}</div></div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
-        <span class="estado-badge ${est.toLowerCase()}">${ESTADO_LABELS[est]||est}</span>
+        <span class="estado-badge ${ESTADO_LABELS[est]?est.toLowerCase():''}">${esc(ESTADO_LABELS[est]||est)}</span>
         ${badgeArchivada}
       </div>
     </div>
-    <div class="orden-body" id="body-${o.id}">
+    <div class="orden-body" id="body-${esc(o.id)}">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">Servicios</div>
       ${prods.map(p=>`<div class="producto-row"><span class="producto-nombre">${esc(p.nombre)}</span><span class="producto-costo">${fmt(p.costo)}</span></div>`).join('')}
       <div class="orden-totales">
@@ -1507,7 +1512,7 @@ function renderClientes() {
 
 function clienteCard(c) {
   const { count, total, saldo } = statsCliente(c);
-  return `<div class="orden-card" onclick="verClienteDetalle('${c.id}')">
+  return `<div class="orden-card" onclick="verClienteDetalle(${jsa(c.id)})">
     <div class="orden-header">
       <div><div class="orden-title">👤 ${esc(c.nombre||'—')}</div>
       <div class="orden-sub">${esc(c.telefono||'sin teléfono')} · ${count} orden${count!==1?'es':''}</div></div>
@@ -1599,10 +1604,10 @@ function verClienteDetalle(id) {
       ${waHref?`<a class="btn btn-green btn-sm" href="${waHref}" target="_blank" rel="noopener">💬 WhatsApp</a>`:''}
     </div>` : ''}
     ${c.notas ? `<div class="nota-box" style="background:var(--surface2);border-left:3px solid var(--accent);padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:16px">${esc(c.notas)}</div>` : ''}
-    <button class="btn btn-primary" style="width:100%;margin-bottom:8px" onclick="verEstadoCuenta('${c.id}')">📤 Enviar estado de cuenta</button>
+    <button class="btn btn-primary" style="width:100%;margin-bottom:8px" onclick="verEstadoCuenta(${jsa(c.id)})">📤 Enviar estado de cuenta</button>
     <div style="display:flex;gap:8px;margin-bottom:20px">
-      <button class="btn btn-ghost btn-sm" onclick="abrirModalCliente('${c.id}')">✏️ Editar</button>
-      <button class="btn btn-danger btn-sm" onclick="eliminarCliente('${c.id}')">🗑️ Eliminar</button>
+      <button class="btn btn-ghost btn-sm" onclick="abrirModalCliente(${jsa(c.id)})">✏️ Editar</button>
+      <button class="btn btn-danger btn-sm" onclick="eliminarCliente(${jsa(c.id)})">🗑️ Eliminar</button>
     </div>
     <div class="form-section">Historial de órdenes</div>
     ${ords.length ? ords.map(o=>ordenCard(o)).join('') : '<div class="empty" style="padding:24px"><div class="empty-text">Sin órdenes aún</div></div>'}
@@ -1779,9 +1784,9 @@ function buildFormHTML(orden) {
   <div class="form-section">Pagos y estado</div>
   <div class="form-row cols-3">
     <div class="form-group"><label class="form-label">Total <span style="color:var(--green);font-size:10px">● AUTO</span></label>
-      <input class="form-input" type="number" id="f-total" placeholder="Auto" value="${o.total||''}" style="color:var(--accent2);font-weight:700"></div>
+      <input class="form-input" type="number" id="f-total" placeholder="Auto" value="${esc(o.total||'')}" style="color:var(--accent2);font-weight:700"></div>
     <div class="form-group"><label class="form-label">A cuenta</label>
-      <input class="form-input" type="number" id="f-a-cuenta" placeholder="0" value="${o.a_cuenta_total||''}"></div>
+      <input class="form-input" type="number" id="f-a-cuenta" placeholder="0" value="${esc(o.a_cuenta_total||'')}"></div>
     <div class="form-group"><label class="form-label">Estado</label>
       <select class="form-select" id="f-estado">
         <option value="PENDIENTE" ${(o.estado||'PENDIENTE')==='PENDIENTE'?'selected':''}>Pendiente</option>
@@ -1808,9 +1813,9 @@ function productoRowHTML(p,i) {
     </div>
     <div class="form-row cols-3">
       <div class="form-group"><label class="form-label">Costo ($)</label>
-        <input class="form-input prod-costo" type="number" placeholder="0" value="${p.costo||''}" oninput="calcGanancia(this)"></div>
+        <input class="form-input prod-costo" type="number" placeholder="0" value="${esc(p.costo||'')}" oninput="calcGanancia(this)"></div>
       <div class="form-group"><label class="form-label">Inversión ($)</label>
-        <input class="form-input prod-inversion" type="number" placeholder="0" value="${p.inversion||''}" oninput="calcGanancia(this)"></div>
+        <input class="form-input prod-inversion" type="number" placeholder="0" value="${esc(p.inversion||'')}" oninput="calcGanancia(this)"></div>
       <div class="form-group"><label class="form-label">Garantía</label>
         <select class="form-select prod-garantia">
           <option value="" ${!p.garantia?'selected':''}>Sin garantía</option>
@@ -1970,12 +1975,12 @@ function buildCotFormHTML() {
     <input class="form-input" id="c-direccion" placeholder="Dirección del cliente"></div>
   <div class="form-row cols-2">
     <div class="form-group"><label class="form-label">No. Cotización</label>
-      <input class="form-input" id="c-folio" value="${folio}"></div>
+      <input class="form-input" id="c-folio" value="${esc(folio)}"></div>
     <div class="form-group"><label class="form-label">Fecha</label>
-      <input class="form-input" type="date" id="c-fecha" value="${hoy}"></div>
+      <input class="form-input" type="date" id="c-fecha" value="${esc(hoy)}"></div>
   </div>
   <div class="form-group" style="margin-bottom:12px"><label class="form-label">Válida hasta</label>
-    <input class="form-input" type="date" id="c-vigencia" value="${vigencia}"></div>
+    <input class="form-input" type="date" id="c-vigencia" value="${esc(vigencia)}"></div>
   <div class="form-section">Descripción del proyecto</div>
   <div class="form-group" style="margin-bottom:12px">
     <textarea class="form-textarea" id="c-descripcion" rows="3" placeholder="Describe brevemente el alcance del servicio..." style="resize:vertical"></textarea></div>
@@ -2053,15 +2058,15 @@ function cotPartidaHTML(p,i) {
       <div class="form-group"><label class="form-label">Marca / Modelo</label>
         <input class="form-input cot-pmarca" placeholder="Marca" value="${esc(p.marca||'')}"></div>
       <div class="form-group"><label class="form-label">Cant.</label>
-        <input class="form-input cot-pcant" type="number" value="${p.cant||1}" min="1" step="1" oninput="calcPartida(this);recalcCot()"></div>
+        <input class="form-input cot-pcant" type="number" value="${esc(p.cant||1)}" min="1" step="1" oninput="calcPartida(this);recalcCot()"></div>
       <div class="form-group"><label class="form-label">P. Unitario ($)</label>
-        <input class="form-input cot-pprecio" type="number" placeholder="0" value="${p.precio||''}" oninput="calcPartida(this);recalcCot()"></div>
+        <input class="form-input cot-pprecio" type="number" placeholder="0" value="${esc(p.precio||'')}" oninput="calcPartida(this);recalcCot()"></div>
     </div>
     <div class="form-row cols-2">
       <div class="form-group"><label class="form-label">Dscto. %</label>
-        <input class="form-input cot-pdescto" type="number" value="${p.descto||0}" min="0" max="100" oninput="calcPartida(this);recalcCot()"></div>
+        <input class="form-input cot-pdescto" type="number" value="${esc(p.descto||0)}" min="0" max="100" oninput="calcPartida(this);recalcCot()"></div>
       <div class="form-group"><label class="form-label">Subtotal</label>
-        <input class="form-input cot-psubtotal" type="number" readonly value="${sub||''}" style="color:var(--accent2);font-weight:700;background:var(--surface)"></div>
+        <input class="form-input cot-psubtotal" type="number" readonly value="${esc(sub||'')}" style="color:var(--accent2);font-weight:700;background:var(--surface)"></div>
     </div>
   </div>`;
 }
@@ -2788,10 +2793,10 @@ function abrirModalAbono(id) {
     </div>
     <div class="form-group" style="margin-bottom:20px">
       <label class="form-label">Monto del abono</label>
-      <input class="form-input" id="abono-monto" type="number" step="0.01" min="0.01" max="${saldo}" placeholder="0" value="${saldo}">
+      <input class="form-input" id="abono-monto" type="number" step="0.01" min="0.01" max="${esc(saldo)}" placeholder="0" value="${esc(saldo)}">
     </div>
     <div style="display:flex;gap:10px;margin-bottom:${abonosPrevios?'20px':'0'}">
-      <button class="btn btn-primary" style="flex:1" onclick="submitAbono('${id}')">💰 Registrar abono</button>
+      <button class="btn btn-primary" style="flex:1" onclick="submitAbono(${jsa(id)})">💰 Registrar abono</button>
       <button class="btn btn-ghost" onclick="cerrarModalCliente()">Cancelar</button>
     </div>
     ${abonosPrevios ? `<div class="form-section">Abonos anteriores</div>${abonosPrevios}` : ''}
@@ -3295,7 +3300,7 @@ function renderHistorialOrdenes() {
     const label = new Date(h.mes+'-02').toLocaleDateString('es-MX',{month:'long',year:'numeric'});
     const pagadas = (h.ordenes||[]).filter(o=>(o.estado||'').toUpperCase()==='PAGADO').length;
     const termos  = (h.ordenes||[]).filter(o=>(o.estado||'').toUpperCase()==='TERMO').length;
-    return `<div class="historial-mes-card" onclick="verHistorialMes('${h.mes}')">
+    return `<div class="historial-mes-card" onclick="verHistorialMes(${jsa(h.mes)})">
       <div class="historial-mes-info">
         <div class="historial-mes-nombre">${label}</div>
         <div class="historial-mes-stats">${(h.ordenes||[]).length} órdenes · ${pagadas} pagadas · ${termos} termo</div>
@@ -3321,17 +3326,17 @@ function verHistorialMes(mes) {
           ? prods.map(p=>`<div class="producto-row"><span class="producto-nombre">${esc(p.nombre||'—')}${p.garantia?` <span style="color:var(--muted);font-size:11px">(${esc(GARANTIA_LABELS[p.garantia]||p.garantia)})</span>`:''}</span><span class="producto-costo">${fmt(p.costo)}</span></div>`).join('')
           : '<div style="font-size:12px;color:var(--muted)">Sin servicios registrados</div>';
         return `<div class="orden-card" style="margin-bottom:8px">
-          <div class="orden-header" onclick="toggleOrdenHistorial('${o.id}')">
+          <div class="orden-header" onclick="toggleOrdenHistorial(${jsa(o.id)})">
             <div>
               <div class="orden-title">${esc(o.vehiculo||'—')} · ${esc(o.cliente||'—')}</div>
               <div class="orden-sub">${prods.length} servicio(s) · ${esc(o.fecha_instalacion||'')} · <span style="color:var(--accent)">toca para ver los servicios</span></div>
             </div>
             <div style="text-align:right">
-              <span class="estado-badge ${est.toLowerCase()}">${ESTADO_LABELS[est]||est}</span>
+              <span class="estado-badge ${ESTADO_LABELS[est]?est.toLowerCase():''}">${esc(ESTADO_LABELS[est]||est)}</span>
               <div style="font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--green);margin-top:4px">${fmt(o.total||0)}</div>
             </div>
           </div>
-          <div class="orden-body" id="hist-body-${o.id}">
+          <div class="orden-body" id="hist-body-${esc(o.id)}">
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">Servicios realizados</div>
             ${servicios}
           </div>

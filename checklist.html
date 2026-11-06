@@ -1424,13 +1424,13 @@ function renderCustomItems(panel) {
   // Preservar IDs de ítems actualmente seleccionados antes de re-renderizar
   const selIds = new Set([...list.querySelectorAll('.custom-item.sel')].map(el => el.id));
   list.innerHTML = items.map(item => `
-    <div class="custom-item${selIds.has('ci-'+panel+'-'+item.id) ? ' sel' : ''}" id="ci-${panel}-${item.id}" data-label="${esc(item.label)}">
-      <div class="chk" onclick="selCustom(this,'${panel}')"></div>
-      <div class="item-text" onclick="selCustom(this.parentElement.querySelector('.chk'),'${panel}')">
+    <div class="custom-item${selIds.has('ci-'+panel+'-'+item.id) ? ' sel' : ''}" id="ci-${esc(panel)}-${esc(item.id)}" data-label="${esc(item.label)}">
+      <div class="chk" onclick="selCustom(this,${jsa(panel)})"></div>
+      <div class="item-text" onclick="selCustom(this.parentElement.querySelector('.chk'),${jsa(panel)})">
         <div class="item-name">${esc(item.label)}</div>
       </div>
       <span class="custom-badge">CUSTOM</span>
-      <button class="btn-del-item" onclick="deleteCustomItem('${panel}',${item.id})" title="Eliminar ítem">✕</button>
+      <button class="btn-del-item" onclick="deleteCustomItem(${jsa(panel)},${jsa(item.id)})" title="Eliminar ítem">✕</button>
     </div>`).join('');
 }
 
@@ -1442,9 +1442,11 @@ function selCustom(chkEl, panel) {
 }
 
 function esc(s) {
-  if (!s) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  if (s==null || s==='') return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
 }
+
+function jsa(v) { return esc(JSON.stringify(v==null?null:v)); }
 
 // ── BUILD DYNAMIC TABS & PANELS ──
 function buildDynamicTabs() {
@@ -1496,7 +1498,7 @@ function buildDynamicTabs() {
         </div>
         <div class="items-list">
           ${svc.options.map(opt => `
-            <div class="item" onclick="sel(this,'${tid}')" data-label="${esc(opt)}">
+            <div class="item" onclick="sel(this,${jsa(tid)})" data-label="${esc(opt)}">
               <div class="chk"></div>
               <div class="item-text"><div class="item-name">${esc(opt)}</div></div>
               <span class="item-tag tag-c">OPC</span>
@@ -1504,7 +1506,7 @@ function buildDynamicTabs() {
         </div>
       </div>
       <div class="add-item-sect" id="custom-sect-${tid}">
-        <div class="add-item-head" onclick="toggleAddForm('${tid}')">
+        <div class="add-item-head" onclick="toggleAddForm(${jsa(tid)})">
           <div class="add-item-toggle">+</div>
           <div class="add-item-label">Agregar ítem personalizado</div>
           <div class="add-item-count" id="custom-count-${tid}">0 personalizados</div>
@@ -1512,7 +1514,7 @@ function buildDynamicTabs() {
         <div class="add-item-form" id="add-form-${tid}">
           <div class="add-item-inputs">
             <input id="custom-input-${tid}" placeholder="Escribe una opción extra" maxlength="80">
-            <button class="btn-add-item" onclick="addCustomItem('${tid}')">+ Agregar</button>
+            <button class="btn-add-item" onclick="addCustomItem(${jsa(tid)})">+ Agregar</button>
           </div>
           <div class="custom-items-list" id="custom-list-${tid}"></div>
         </div>
@@ -1522,8 +1524,8 @@ function buildDynamicTabs() {
         <div class="field-g"><textarea id="${tid}_notas" rows="2" placeholder="Detalles extra..."></textarea></div>
       </div>
       <div class="action-row">
-        <button class="reset-btn" onclick="resetPanel('${tid}')">🔄 Limpiar</button>
-        <button class="reset-btn" style="color:var(--orange);border-color:var(--orange)" onclick="deleteServiceFromTab(${svc.id})">🗑 Eliminar servicio</button>
+        <button class="reset-btn" onclick="resetPanel(${jsa(tid)})">🔄 Limpiar</button>
+        <button class="reset-btn" style="color:var(--orange);border-color:var(--orange)" onclick="deleteServiceFromTab(${jsa(svc.id)})">🗑 Eliminar servicio</button>
       </div>
       <div style="height:80px"></div>`;
     const agregarPanel = document.getElementById('panel-agregar');
@@ -1768,7 +1770,7 @@ function renderSavedList() {
           <div class="saved-item-name">${esc(s.icon)} ${esc(s.name)}</div>
           <div class="saved-item-count">${s.options.length} opción(es)</div>
         </div>
-        <button class="del-btn" onclick="deleteService(${s.id})">🗑</button>
+        <button class="del-btn" onclick="deleteService(${jsa(s.id)})">🗑</button>
       </div>`).join('');
 }
 
@@ -1918,7 +1920,7 @@ function renderFinanceDashboard() {
         <div class="mov-dot ${dotClass}"></div>
         <div class="mov-info">
           <div class="mov-desc">${esc(m.desc)}</div>
-          <div class="mov-fecha">${m.fecha||''}</div>
+          <div class="mov-fecha">${esc(m.fecha)}</div>
         </div>
         ${montoTxt}
       </div>`;
@@ -1981,7 +1983,7 @@ function renderHistorico() {
           </div>
         </div>
         ${resetInfo}
-        <button class="btn-rst-hist" onclick="pedirResetMesHistorial('${h.mes}')">🔄 Reiniciar efectivo de ${formatMes(h.mes)}</button>
+        <button class="btn-rst-hist" onclick="pedirResetMesHistorial(${jsa(h.mes)})">🔄 Reiniciar efectivo de ${formatMes(h.mes)}</button>
       </div>`;
   }).join('');
 }
