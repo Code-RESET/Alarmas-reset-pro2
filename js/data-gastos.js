@@ -48,13 +48,16 @@ async function guardarGasto(gasto) {
   const data = {...gasto};
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
-      const { addDoc, updateDoc } = window._firebaseModules;
+      const { setDoc, updateDoc } = window._firebaseModules;
       if (data.id) {
         const id = data.id; delete data.id;
-        await updateDoc(window.docGasto(id), data);
+        await window._fsEscribir(updateDoc(window.docGasto(id), data));
         return id;
       } else {
-        const ref = await addDoc(window.colGastos(), data);
+        // ID generado localmente: funciona igual sin señal (queda en la
+        // cola persistente de Firestore) en vez de quedarse esperando.
+        const ref = window.nuevoDoc(window.colGastos());
+        await window._fsEscribir(setDoc(ref, data));
         return ref.id;
       }
     } catch(e) {
@@ -81,7 +84,7 @@ async function eliminarGasto(id) {
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
       const { deleteDoc } = window._firebaseModules;
-      await deleteDoc(window.docGasto(id));
+      await window._fsEscribir(deleteDoc(window.docGasto(id)));
       window.toast('Gasto eliminado');
     } catch(e) {
       console.error(e);

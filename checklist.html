@@ -13,6 +13,21 @@
 <link rel="icon" type="image/png" sizes="512x512" href="assets/icon-512.png">
 <title>RESET Alarmas y GPS — Cotizaciones</title>
 <script>
+// Captura global: errores que antes se perdían sin aviso (lista vacía,
+// guardados fallidos) ahora al menos se muestran. Máx. un aviso cada 10 s.
+(function(){
+  let ultimo = 0;
+  function avisar(msg){
+    console.error('[error global]', msg);
+    const ahora = Date.now();
+    if (ahora - ultimo < 10000 || typeof toast !== 'function') return;
+    ultimo = ahora;
+    try { toast('⚠️ Error inesperado: ' + String(msg).slice(0, 120)); } catch(e) {}
+  }
+  window.addEventListener('error', e => { if (e.message) avisar(e.message); });
+  window.addEventListener('unhandledrejection', e => avisar((e.reason && (e.reason.message || e.reason.code)) || e.reason));
+})();
+
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js?v=14').catch(e => console.warn('SW error:', e)));
   }
@@ -1808,6 +1823,39 @@ function saveFinHistorial(arr) {
   _syncFinToFirebase();
 }
 
+// Fusiona el mes actual de dos dispositivos sin perder movimientos.
+// Antes ganaba "el que tuviera más movimientos" y el documento entero
+// reemplazaba al otro: si A registraba 2 y B 3 distintos, se perdían los 2
+// de A. Ahora se unen los movimientos y los totales se ajustan sumando
+// solo lo que faltaba en el lado base.
+//   - clearTs: "Resetear flujo" (borra movimientos) — se descarta todo lo anterior.
+//   - movimiento tipo 'reset': "Reiniciar mes" — los totales vuelven a 0 desde ahí.
+function _claveMov(m) { return [m.id, m.tipo, m.monto, m.desc].join('|'); }
+function _ultimoReset(c) {
+  return Math.max(c.clearTs || 0, ...(c.movimientos||[]).filter(m => m.tipo === 'reset').map(m => m.id || 0));
+}
+function mergeFinCurrent(local, remoto) {
+  if (!local || !local.mes) return remoto;
+  if (!remoto || !remoto.mes) return local;
+  if (local.mes !== remoto.mes) return local.mes > remoto.mes ? local : remoto;
+  const rL = _ultimoReset(local), rR = _ultimoReset(remoto);
+  const base = rR > rL ? remoto : local;
+  const otro = base === local ? remoto : local;
+  const corte = Math.max(rL, rR);
+  const clearTs = Math.max(local.clearTs || 0, remoto.clearTs || 0);
+  const enBase = new Set((base.movimientos||[]).map(_claveMov));
+  const faltantes = (otro.movimientos||[]).filter(m => !enBase.has(_claveMov(m)) && (m.id||0) > clearTs);
+  let ganancia = base.ganancia || 0, inversion = base.inversion || 0;
+  faltantes.forEach(m => {
+    if ((m.id||0) <= corte) return;
+    if (m.tipo === 'ganancia') ganancia += m.monto || 0;
+    else if (m.tipo === 'inversion') inversion += m.monto || 0;
+  });
+  const movimientos = [...(base.movimientos||[]).filter(m => (m.id||0) > clearTs || m.tipo === 'reset'), ...faltantes]
+    .sort((a,b) => (b.id||0) - (a.id||0)).slice(0, 200);
+  return { ...base, clearTs, ganancia, inversion, movimientos };
+}
+
 // Sube finanzas a Firebase con debounce para agrupar escrituras rápidas
 let _finSyncTimer = null;
 function _syncFinToFirebase() {
@@ -1938,7 +1986,7 @@ function resetFlujoDinero() {
     'Se borrarán ganancias, inversiones y movimientos del mes actual. El historial de meses anteriores NO se modifica.',
     () => {
       const currentKey = getCurrentMonthKey();
-      saveFinCurrent({mes: currentKey, ganancia: 0, inversion: 0, movimientos: []});
+      saveFinCurrent({mes: currentKey, ganancia: 0, inversion: 0, movimientos: [], clearTs: Date.now()});
       renderFinanceDashboard();
     }
   );
@@ -2197,17 +2245,14 @@ function initFirebase() {
     const localCurrent = loadFinCurrent();
     const localHist = loadFinHistorial();
 
-    // Mes actual: tomar el más reciente; si es el mismo mes, el que tiene más movimientos
+    // Mes actual: unir movimientos de ambos lados (ver mergeFinCurrent)
     if (data.current && data.current.mes) {
-      const fbMes = data.current.mes;
-      const localMes = localCurrent ? localCurrent.mes : '';
-      const mismoMes = fbMes === localMes;
-      const fbMasMovs = (data.current.movimientos||[]).length >= (localCurrent ? (localCurrent.movimientos||[]).length : 0);
-      if (!localMes || fbMes > localMes || (mismoMes && fbMasMovs)) {
-        localStorage.setItem('fin_current', JSON.stringify(data.current));
-      } else if (mismoMes && !fbMasMovs) {
-        // Local tiene más datos del mismo mes → subir a Firebase
-        _syncFinToFirebase();
+      const fusion = mergeFinCurrent(localCurrent, data.current);
+      if (JSON.stringify(fusion) !== JSON.stringify(localCurrent)) {
+        localStorage.setItem('fin_current', JSON.stringify(fusion));
+      }
+      if (JSON.stringify(fusion) !== JSON.stringify(data.current)) {
+        _syncFinToFirebase(); // el servidor no tiene todo lo de este dispositivo
       }
     }
 

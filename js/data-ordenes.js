@@ -72,31 +72,73 @@ async function cargarOrdenes() {
   cargarOrdenesLocal();
 }
 
-async function guardarOrden(orden) {
+// Campos de dinero que el formulario de edición NO debe pisar a ciegas:
+// otro dispositivo pudo registrar un abono (o cambiar el estado) mientras
+// este tenía el formulario abierto.
+//   base = { a_cuenta_total, estado } tal como estaban al abrir el formulario.
+// Si el usuario no tocó "A cuenta" ni "Estado", se conservan los valores del
+// servidor. Si sí los tocó, "A cuenta" se ajusta por la DIFERENCIA (así un
+// abono concurrente no se pierde) y queda un registro del ajuste en abonos.
+function _parcheEdicion(orden, base) {
+  const parche = {...orden};
+  delete parche.id; delete parche.a_cuenta_total; delete parche.abonos; delete parche.estado;
+  const deltaACuenta = Math.round(((orden.a_cuenta_total||0) - (base?.a_cuenta_total||0)) * 100) / 100;
+  const estadoCambiado = !base || (orden.estado||'') !== (base.estado||'');
+  return { parche, deltaACuenta, estadoCambiado };
+}
+
+async function guardarOrden(orden, base) {
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
-      const { addDoc, updateDoc } = window._firebaseModules;
+      const { setDoc, updateDoc, runTransaction, increment, arrayUnion } = window._firebaseModules;
       if (orden.id) {
         const id = orden.id;
-        const data = {...orden};
-        delete data.id;
-        await updateDoc(window.docOrden(id), data);
+        const ref = window.docOrden(id);
+        const { parche, deltaACuenta, estadoCambiado } = _parcheEdicion(orden, base);
+        const ajuste = deltaACuenta ? { monto: deltaACuenta, fecha: Date.now(), id: 'aj_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6), tipo: 'ajuste' } : null;
+        if (navigator.onLine) {
+          try {
+            await runTransaction(window._firebaseDb, async (tx) => {
+              const snap = await tx.get(ref);
+              if (!snap.exists()) throw new Error('ORDEN_NO_EXISTE');
+              const srv = snap.data();
+              const upd = {...parche};
+              if (ajuste) {
+                upd.a_cuenta_total = Math.round(((srv.a_cuenta_total||0) + deltaACuenta) * 100) / 100;
+                upd.abonos = [...(srv.abonos||[]), ajuste];
+              }
+              if (estadoCambiado) upd.estado = orden.estado;
+              tx.update(ref, upd);
+            });
+            return 'ok';
+          } catch(e) {
+            if (e.message === 'ORDEN_NO_EXISTE') { window.toast('⚠️ Esta orden ya no existe'); throw e; }
+            if (e.code && e.code !== 'unavailable' && e.code !== 'failed-precondition') throw e;
+            // sin red real: sigue al camino offline
+          }
+        }
+        // Sin conexión: transformaciones atómicas (increment/arrayUnion) que
+        // Firestore guarda en su cola persistente y aplica en el servidor sin
+        // sobrescribir lo que otro dispositivo haya escrito.
+        const upd = {...parche};
+        if (ajuste) { upd.a_cuenta_total = increment(deltaACuenta); upd.abonos = arrayUnion(ajuste); }
+        if (estadoCambiado) upd.estado = orden.estado;
+        return await window._fsEscribir(updateDoc(ref, upd));
       } else {
-        orden.fecha_creacion = Date.now();
-        await addDoc(window.colOrdenes(), orden);
+        const data = {...orden};
+        data.fecha_creacion = Date.now();
+        const ref = window.nuevoDoc(window.colOrdenes());
+        return await window._fsEscribir(setDoc(ref, data));
       }
-      return;
     } catch(e) {
       console.error(e);
-      window.toast('⚠️ Firebase no disponible — guardando local');
-      window._useFirebase = false;
-      window.updateFirebaseBadge();
-      window._addToOfflineQueue({ tipo: 'guardar', orden: {...orden} });
+      if (e.message !== 'ORDEN_NO_EXISTE') window.toast('⚠️ No se pudo guardar la orden: ' + (e.code || e.message || e));
+      throw e;
     }
   }
   if (orden.id) {
     const idx = window.ordenes.findIndex(o=>o.id===orden.id);
-    if (idx >= 0) window.ordenes[idx] = orden;
+    if (idx >= 0) window.ordenes[idx] = {...window.ordenes[idx], ...orden};
     else window.ordenes.unshift(orden);
   } else {
     orden.id = 'local_'+Date.now();
@@ -105,6 +147,7 @@ async function guardarOrden(orden) {
   }
   window.guardarLocal();
   window.renderAll();
+  return 'ok';
 }
 
 async function eliminarOrden(id) {
@@ -113,7 +156,7 @@ async function eliminarOrden(id) {
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
       const { deleteDoc } = window._firebaseModules;
-      await deleteDoc(window.docOrden(id));
+      await window._fsEscribir(deleteDoc(window.docOrden(id)));
       window.toast('Orden eliminada');
       return;
     } catch(e) {
