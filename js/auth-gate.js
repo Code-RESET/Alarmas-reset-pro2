@@ -147,8 +147,12 @@ export function protegerConLogin(app, db, onListo, opciones = {}) {
       const snap = await getDoc(doc(db, 'permitidos', user.uid));
       if (!snap.exists()) { mostrarNoAutorizado(auth, user); return; }
     } catch (e) {
-      if (e && e.code === 'permission-denied') { mostrarNoAutorizado(auth, user); return; }
-      console.warn('No se pudo verificar la autorización (sin señal?):', e);
+      // Con las reglas nuevas, cada cuenta SIEMPRE puede leer su propio
+      // permitidos/{uid} (exista o no), así que 'permission-denied' aquí solo
+      // ocurre si siguen publicadas reglas anteriores que no conocen esa
+      // colección. En ese caso se deja pasar: el acceso real lo deciden las
+      // reglas del servidor. (Antes se mostraba "Cuenta sin acceso" a todos.)
+      console.warn('No se pudo verificar la autorización (reglas viejas o sin señal):', e);
     }
     ocultar();
     window._authPendiente = false;

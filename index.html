@@ -96,21 +96,21 @@ window._authPendiente = true;
 
 <!-- MÓDULO firebase-init.js: mismo comportamiento que antes, ahora en archivo
      aparte (js/firebase-init.js) para facilitar mantenimiento. -->
-<script type="module" src="js/firebase-init.js?v=22"></script>
+<script type="module" src="js/firebase-init.js?v=23"></script>
 <!-- MÓDULO firestore-paths.js: rutas de colecciones/documentos de Firestore,
      expuestas como funciones globales (window.colOrdenes, etc.) para que el
      resto del código las siga usando sin cambios. -->
-<script type="module" src="js/firestore-paths.js?v=22"></script>
+<script type="module" src="js/firestore-paths.js?v=23"></script>
 <!-- MÓDULO data-ordenes.js: carga/guardado/eliminación de órdenes.
      Depende de window.ordenes, window.IDB, window.renderAll, etc. — ver
      comentarios dentro del archivo. Debe cargar DESPUÉS de firebase-init.js
      y firestore-paths.js, aunque en la práctica no importa el orden exacto
      porque solo se usan dentro de funciones, no al cargar el módulo. -->
-<script type="module" src="js/data-ordenes.js?v=22"></script>
+<script type="module" src="js/data-ordenes.js?v=23"></script>
 <!-- MÓDULO data-clientes.js: carga/guardado/eliminación de clientes. -->
-<script type="module" src="js/data-clientes.js?v=22"></script>
+<script type="module" src="js/data-clientes.js?v=23"></script>
 <!-- MÓDULO data-gastos.js: carga/guardado/eliminación de gastos de materiales. -->
-<script type="module" src="js/data-gastos.js?v=22"></script>
+<script type="module" src="js/data-gastos.js?v=23"></script>
 
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#ff6b35">
