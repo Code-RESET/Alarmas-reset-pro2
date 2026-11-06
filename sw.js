@@ -1,4 +1,4 @@
-const CACHE = 'app-v18';
+const CACHE = 'app-v19';
 const STATIC = [
   './',
   './index.html',
