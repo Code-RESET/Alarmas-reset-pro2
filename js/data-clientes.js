@@ -49,13 +49,16 @@ async function guardarCliente(cliente) {
   data.nombre_lower = (data.nombre||'').trim().toLowerCase();
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
-      const { addDoc, updateDoc } = window._firebaseModules;
+      const { setDoc, updateDoc } = window._firebaseModules;
       if (data.id) {
         const id = data.id; delete data.id;
-        await updateDoc(window.docCliente(id), data);
+        await window._fsEscribir(updateDoc(window.docCliente(id), data));
         return id;
       } else {
-        const ref = await addDoc(window.colClientes(), data);
+        // ID generado localmente: funciona igual sin señal (queda en la
+        // cola persistente de Firestore) en vez de quedarse esperando.
+        const ref = window.nuevoDoc(window.colClientes());
+        await window._fsEscribir(setDoc(ref, data));
         return ref.id;
       }
     } catch(e) {
@@ -89,7 +92,7 @@ async function _borrarClienteSilencioso(id) {
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
       const { deleteDoc } = window._firebaseModules;
-      await deleteDoc(window.docCliente(id));
+      await window._fsEscribir(deleteDoc(window.docCliente(id)));
       return true;
     } catch(e) {
       console.error(e);

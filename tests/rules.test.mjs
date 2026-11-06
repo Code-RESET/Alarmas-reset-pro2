@@ -1,0 +1,26 @@
+// Reglas de Firestore contra el emulador. Ejecutar con: npm run test:emuladores
+import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
+import { readFileSync } from 'fs';
+import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+const env = await initializeTestEnvironment({ projectId: 'alarmas-reset-e3484', firestore: { rules: readFileSync(new URL('../firestore.rules', import.meta.url),'utf8'), host:'127.0.0.1', port:8085 } });
+await env.withSecurityRulesDisabled(async c => { const f = c.firestore();
+  await setDoc(doc(f, 'permitidos/dueno'), { nombre: 'Dueño' });
+  await setDoc(doc(f, 'usuarios/compartido/ordenes/o1'), { total: 100 });
+});
+const anon = env.unauthenticatedContext().firestore();
+const extra = env.authenticatedContext('intruso', { email:'x@x.com' }).firestore();
+const ok = env.authenticatedContext('dueno', { email:'d@x.com' }).firestore();
+const r = [];
+const t = async (n, p) => { try { await p; r.push('PASS ' + n); } catch(e) { r.push('FAIL ' + n + ' ' + e.message.slice(0,80)); } };
+await t('anónimo no lee', assertFails(getDoc(doc(anon, 'usuarios/compartido/ordenes/o1'))));
+await t('anónimo no escribe', assertFails(setDoc(doc(anon, 'usuarios/compartido/ordenes/o1'), { total: 0 })));
+await t('cuenta no autorizada no lee', assertFails(getDoc(doc(extra, 'usuarios/compartido/ordenes/o1'))));
+await t('cuenta no autorizada no borra', assertFails(deleteDoc(doc(extra, 'usuarios/compartido/ordenes/o1'))));
+await t('no autorizada no se auto-autoriza', assertFails(setDoc(doc(extra, 'permitidos/intruso'), { a:1 })));
+await t('no autorizada lee su permitidos (vacío)', assertSucceeds(getDoc(doc(extra, 'permitidos/intruso'))));
+await t('autorizada lee', assertSucceeds(getDoc(doc(ok, 'usuarios/compartido/ordenes/o1'))));
+await t('autorizada escribe', assertSucceeds(setDoc(doc(ok, 'usuarios/compartido/gastos/g1'), { monto: 5 })));
+await t('autorizada no lee permitidos de otro', assertFails(getDoc(doc(ok, 'permitidos/intruso'))));
+await t('autorizada no edita permitidos', assertFails(setDoc(doc(ok, 'permitidos/dueno'), { x:1 })));
+await t('colección vieja cerrada', assertFails(getDoc(doc(ok, 'ordenes/o1'))));
+console.log(r.join('\n')); await env.cleanup(); process.exit(r.some(x => x.startsWith('FAIL')) ? 1 : 0);

@@ -5,6 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>RESET Alarmas y GPS — Control de Órdenes</title>
 <script>
+// Login pendiente desde el primer momento: el arranque de respaldo no debe
+// abrir la app en modo local mientras se carga el SDK de Firebase y se pide
+// el inicio de sesión. firebase-init lo apaga si Firebase no se usa.
+window._authPendiente = true;
+
+// Captura global: errores que antes se perdían sin aviso (lista vacía,
+// guardados fallidos) ahora al menos se muestran. Máx. un aviso cada 10 s.
+(function(){
+  let ultimo = 0;
+  function avisar(msg){
+    console.error('[error global]', msg);
+    const ahora = Date.now();
+    if (ahora - ultimo < 10000 || typeof toast !== 'function') return;
+    ultimo = ahora;
+    try { toast('⚠️ Error inesperado: ' + String(msg).slice(0, 120)); } catch(e) {}
+  }
+  window.addEventListener('error', e => { if (e.message) avisar(e.message); });
+  window.addEventListener('unhandledrejection', e => avisar((e.reason && (e.reason.message || e.reason.code)) || e.reason));
+})();
+
   // ── PWA: Service Worker + Install Prompt + Update Detection ──
   let _deferredInstallPrompt = null;
 
@@ -76,21 +96,21 @@
 
 <!-- MÓDULO firebase-init.js: mismo comportamiento que antes, ahora en archivo
      aparte (js/firebase-init.js) para facilitar mantenimiento. -->
-<script type="module" src="js/firebase-init.js"></script>
+<script type="module" src="js/firebase-init.js?v=22"></script>
 <!-- MÓDULO firestore-paths.js: rutas de colecciones/documentos de Firestore,
      expuestas como funciones globales (window.colOrdenes, etc.) para que el
      resto del código las siga usando sin cambios. -->
-<script type="module" src="js/firestore-paths.js"></script>
+<script type="module" src="js/firestore-paths.js?v=22"></script>
 <!-- MÓDULO data-ordenes.js: carga/guardado/eliminación de órdenes.
      Depende de window.ordenes, window.IDB, window.renderAll, etc. — ver
      comentarios dentro del archivo. Debe cargar DESPUÉS de firebase-init.js
      y firestore-paths.js, aunque en la práctica no importa el orden exacto
      porque solo se usan dentro de funciones, no al cargar el módulo. -->
-<script type="module" src="js/data-ordenes.js"></script>
+<script type="module" src="js/data-ordenes.js?v=22"></script>
 <!-- MÓDULO data-clientes.js: carga/guardado/eliminación de clientes. -->
-<script type="module" src="js/data-clientes.js"></script>
+<script type="module" src="js/data-clientes.js?v=22"></script>
 <!-- MÓDULO data-gastos.js: carga/guardado/eliminación de gastos de materiales. -->
-<script type="module" src="js/data-gastos.js"></script>
+<script type="module" src="js/data-gastos.js?v=22"></script>
 
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#ff6b35">
@@ -450,6 +470,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-si
     <span id="si-fb-dot" style="font-size:10px;color:var(--muted)">●</span>
   </button>
 
+  <button class="sidebar-item" onclick="cerrarSesionApp()">
+    <span class="si-icon">🚪</span><span class="si-label">Cerrar sesión</span>
+    <span id="si-auth-email" style="font-size:10px;color:var(--muted);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+  </button>
+
   <button id="btn-instalar-pwa" class="sidebar-item" onclick="instalarPWA()" style="display:none;color:var(--green);border-top:1px solid var(--border);margin-top:4px">
     <span class="si-icon">📲</span><span class="si-label">Instalar app</span>
     <span style="font-size:10px;color:var(--green)">PWA</span>
@@ -720,6 +745,8 @@ var gastos = [];
 let filtroEstado = 'todos';
 let vistaAgrupada = true;
 let editandoId = null;
+// Valores de dinero/estado tal como estaban al abrir "Editar" (ver _parcheEdicion en data-ordenes.js)
+let _editBase = null;
 let editandoClienteId = null;
 let editandoGastoId = null;
 let cotFolioNum = parseInt(localStorage.getItem('cot_folio') || '1');
@@ -839,6 +866,14 @@ window.IDB = IDB;
 // ═══════════════════════════════════════
 function fmt(n){ return '$'+(parseFloat(n)||0).toLocaleString('es-MX',{minimumFractionDigits:0,maximumFractionDigits:0}); }
 function esc(s){ if(s==null)return''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;').replace(/\//g,'&#x2F;'); }
+// Argumento seguro para handlers inline (onclick="fn(${jsa(x)})"): el navegador
+// decodifica entidades HTML antes de ejecutar el JS, así que esc() solo no basta.
+// Fecha local AAAA-MM-DD (toISOString() usa UTC: en México, después de
+// las 18:00 daba el día siguiente y el último día del mes caía en el próximo).
+function fechaLocalISO(d){ d = d instanceof Date ? d : new Date(d==null?Date.now():d); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function jsa(v){ return esc(JSON.stringify(v==null?null:v)); }
+// Hash corto y estable para IDs de DOM derivados de texto libre (admite emoji).
+function hashId(s){ let h=5381; s=String(s); for(let i=0;i<s.length;i++){ h=((h<<5)+h+s.charCodeAt(i))|0; } return (h>>>0).toString(36); }
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2800); }
 function renderAll(){
   renderDashboard(); renderOrdenes(); updateSidebarStatus();
@@ -869,7 +904,7 @@ function _calcFinancialSummary(lista) {
 // GASTOS — relación con la ganancia del mes actual
 // ═══════════════════════════════════════
 function _mesDeFecha(fechaMs) {
-  return fechaMs ? new Date(fechaMs).toISOString().slice(0,7) : '';
+  return fechaMs ? fechaLocalISO(fechaMs).slice(0,7) : '';
 }
 // Ganancia (costo-inversión) de las órdenes cuya propia fecha cae en el mes
 // actual. Deliberadamente distinta de "Ganancia Total" del dashboard (que
@@ -879,7 +914,7 @@ function _gananciaDelMesActual() {
   const mesActual = _getMesActual();
   let gan = 0;
   ordenes.forEach(o => {
-    const fechaOrden = o.fecha_instalacion || (o.fecha_creacion ? new Date(o.fecha_creacion).toISOString() : '');
+    const fechaOrden = o.fecha_instalacion || (o.fecha_creacion ? fechaLocalISO(o.fecha_creacion) : '');
     if ((fechaOrden||'').slice(0,7) !== mesActual) return;
     gan += (o.productos||[]).reduce((s,p)=>s+(parseFloat(p.costo)||0)-(parseFloat(p.inversion)||0),0);
   });
@@ -899,7 +934,7 @@ function _facturadoDelMesActual() {
   const mesActual = _getMesActual();
   let fac = 0;
   ordenes.forEach(o => {
-    const fechaOrden = o.fecha_instalacion || (o.fecha_creacion ? new Date(o.fecha_creacion).toISOString() : '');
+    const fechaOrden = o.fecha_instalacion || (o.fecha_creacion ? fechaLocalISO(o.fecha_creacion) : '');
     if ((fechaOrden||'').slice(0,7) !== mesActual) return;
     fac += o.total || 0;
   });
@@ -937,8 +972,8 @@ function gastoCard(g) {
       <span class="estado-badge pendiente">${fmt(g.monto||0)}</span>
     </div>
     <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="abrirModalGasto('${g.id}')">✏️ Editar</button>
-      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="eliminarGasto('${g.id}')">🗑️ Eliminar</button>
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="abrirModalGasto(${jsa(g.id)})">✏️ Editar</button>
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="eliminarGasto(${jsa(g.id)})">🗑️ Eliminar</button>
     </div>
   </div>`;
 }
@@ -953,7 +988,7 @@ function abrirModalGasto(id) {
 
 function buildGastoFormHTML(g) {
   const o = g || {};
-  const fechaVal = o.fecha ? new Date(o.fecha).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
+  const fechaVal = fechaLocalISO(o.fecha || Date.now());
   return `
   <div class="form-row">
     <div class="form-group"><label class="form-label">¿Qué compraste? *</label>
@@ -961,9 +996,9 @@ function buildGastoFormHTML(g) {
   </div>
   <div class="form-row cols-2" style="margin-bottom:20px">
     <div class="form-group"><label class="form-label">Monto *</label>
-      <input class="form-input" id="ga-monto" type="number" step="0.01" min="0.01" placeholder="0" value="${o.monto||''}"></div>
+      <input class="form-input" id="ga-monto" type="number" step="0.01" min="0.01" placeholder="0" value="${esc(o.monto||'')}"></div>
     <div class="form-group"><label class="form-label">Fecha</label>
-      <input class="form-input" id="ga-fecha" type="date" value="${fechaVal}"></div>
+      <input class="form-input" id="ga-fecha" type="date" value="${esc(fechaVal)}"></div>
   </div>
   <div style="display:flex;gap:10px">
     <button class="btn btn-primary" style="flex:1" onclick="submitGasto()">💾 Guardar</button>
@@ -985,7 +1020,9 @@ async function submitGasto() {
     const fecha = fechaStr ? new Date(fechaStr + 'T12:00:00').getTime() : Date.now();
     const gasto = { concepto, monto, fecha };
     if (editandoGastoId) gasto.id = editandoGastoId;
-    await guardarGasto(gasto);
+    // guardarGasto devuelve null si Firestore rechazó la escritura: en ese
+    // caso el modal queda abierto (antes avisaba "guardado" igual).
+    if (!(await guardarGasto(gasto))) return;
     toast('✅ Gasto guardado');
     cerrarModalCliente();
   } finally {
@@ -1008,26 +1045,55 @@ function _addToOfflineQueue(op) {
   q.push({...op, _ts: Date.now()});
   localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(q));
 }
+// Cola heredada de versiones anteriores. Ya no se agregan entradas (las
+// escrituras sin señal ahora van a la cola persistente de Firestore), pero
+// puede haber teléfonos con entradas pendientes que guardaban la orden
+// COMPLETA. Subirlas tal cual pisaba abonos y ediciones de otros
+// dispositivos; ahora solo se suben los abonos que el servidor no tiene.
+let _procesandoCola = false;
 async function _processOfflineQueue() {
-  if (!window._useFirebase || !window._firebaseDb) return;
-  const q = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY)||'[]');
+  if (_procesandoCola || !window._useFirebase || !window._firebaseDb || !navigator.onLine) return;
+  let q;
+  try { q = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY)||'[]'); } catch(e) { q = []; }
   if (!q.length) return;
-  const { addDoc, updateDoc, deleteDoc } = window._firebaseModules;
+  _procesandoCola = true;
+  const { setDoc, deleteDoc, runTransaction } = window._firebaseModules;
   const pendientes = [];
   for (const op of q) {
     try {
       if (op.tipo === 'guardar' && op.orden) {
         const d = {...op.orden}; const id = d.id; delete d.id; delete d._ts;
-        if (id && !id.startsWith('local_')) await updateDoc(docOrden(id), d);
-        else await addDoc(colOrdenes(), d);
+        if (id && !id.startsWith('local_')) {
+          const ref = docOrden(id);
+          await runTransaction(window._firebaseDb, async (tx) => {
+            const snap = await tx.get(ref);
+            if (!snap.exists()) return; // se borró/archivó en otro dispositivo
+            const srv = snap.data();
+            const clave = a => a.id || (a.fecha + '|' + a.monto);
+            const enSrv = new Set((srv.abonos||[]).map(clave));
+            const nuevos = (d.abonos||[]).filter(a => !enSrv.has(clave(a)));
+            if (!nuevos.length) return;
+            const suma = nuevos.reduce((t,a)=>t+(a.monto||0),0);
+            const aCuenta = Math.round(((srv.a_cuenta_total||0) + suma) * 100) / 100;
+            const upd = { abonos: [...(srv.abonos||[]), ...nuevos], a_cuenta_total: aCuenta };
+            if ((srv.total||0) - aCuenta <= 0.01) upd.estado = 'PAGADO';
+            tx.update(ref, upd);
+          });
+        } else {
+          await window._fsEscribir(setDoc(window.nuevoDoc(colOrdenes()), d));
+        }
       } else if (op.tipo === 'eliminar' && op.id) {
-        await deleteDoc(docOrden(op.id));
+        await window._fsEscribir(deleteDoc(docOrden(op.id)));
       }
-    } catch(e) { pendientes.push(op); }
+    } catch(e) { console.error('cola offline:', e); pendientes.push(op); }
   }
   localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(pendientes));
-  if (pendientes.length < q.length) toast('☁️ ' + (q.length - pendientes.length) + ' cambio(s) sincronizados');
+  _procesandoCola = false;
+  if (pendientes.length < q.length) toast('☁️ ' + (q.length - pendientes.length) + ' cambio(s) pendientes sincronizados');
 }
+// También al arrancar: antes solo corría con el evento 'online', así que si
+// la app se cerraba sin señal y se abría ya conectada, la cola nunca se subía.
+window.addEventListener('firebaseReady', () => setTimeout(_processOfflineQueue, 3000));
 window.addEventListener('online', () => {
   document.getElementById('offline-banner')?.classList.remove('show');
   window._useFirebase = !!window._firebaseDb;
@@ -1047,7 +1113,7 @@ function abrirDoc(titulo, bodyHTML) {
   // Construir HTML completo con estilos
   _docHTML = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
     + '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    + '<title>' + titulo + ' — RESET Alarmas y GPS</title>'
+    + '<title>' + esc(titulo) + ' — RESET Alarmas y GPS</title>'
     + '<style>' + DOC_CSS + '</style>'
     + '</head><body>' + bodyHTML + '</body></html>';
 
@@ -1204,8 +1270,9 @@ async function fusionarClientesDuplicados() {
   );
   if (!ok) return;
 
-  let ordenesReasignadas = 0;
-  const { updateDoc } = window._firebaseModules || {};
+  let ordenesReasignadas = 0, fallidos = 0;
+  const { writeBatch } = window._firebaseModules || {};
+  const enNube = !!(window._useFirebase && window._firebaseDb && window._uid && writeBatch);
   for (const grupo of gruposDuplicados) {
     // Cliente canónico: el que ya tenga teléfono capturado; si ninguno, el más antiguo
     const conTelefono = grupo.find(c => c.telefono);
@@ -1219,22 +1286,30 @@ async function fusionarClientesDuplicados() {
       if (dup.notas && !notas.includes(dup.notas)) notas = notas ? notas + ' / ' + dup.notas : dup.notas;
 
       const ordsDelDup = ordenes.filter(o => o.cliente_id === dup.id);
-      for (const o of ordsDelDup) {
-        if (window._useFirebase && window._firebaseDb && window._uid && updateDoc) {
-          try { await updateDoc(docOrden(o.id), { cliente_id: canonico.id }); }
-          catch(e) { console.error(e); }
-        } else {
-          o.cliente_id = canonico.id;
-        }
-        ordenesReasignadas++;
+      if (enNube) {
+        // Reasignar las órdenes y borrar el duplicado en un solo lote: si
+        // algo falla no se borra el cliente (antes se borraba igual y sus
+        // órdenes quedaban apuntando a un cliente inexistente).
+        try {
+          const batch = writeBatch(window._firebaseDb);
+          ordsDelDup.forEach(o => batch.update(docOrden(o.id), { cliente_id: canonico.id }));
+          batch.delete(docCliente(dup.id));
+          await window._fsEscribir(batch.commit(), 10000);
+          ordenesReasignadas += ordsDelDup.length;
+        } catch(e) { console.error(e); fallidos++; }
+      } else {
+        ordsDelDup.forEach(o => { o.cliente_id = canonico.id; });
+        ordenesReasignadas += ordsDelDup.length;
+        await _borrarClienteSilencioso(dup.id);
       }
-      await _borrarClienteSilencioso(dup.id);
     }
     await guardarCliente({ id: canonico.id, nombre: canonico.nombre, telefono, email: canonico.email||'', notas, fecha_creacion: canonico.fecha_creacion||Date.now() });
   }
   if (!window._useFirebase) { guardarLocal(); }
   renderAll(); renderClientes();
-  toast(`✅ Fusionados ${gruposDuplicados.length} grupo(s) — ${ordenesReasignadas} orden(es) reasignada(s)`);
+  toast(fallidos
+    ? `⚠️ ${fallidos} cliente(s) no se pudieron fusionar (se conservaron). ${ordenesReasignadas} orden(es) reasignada(s)`
+    : `✅ Fusionados ${gruposDuplicados.length} grupo(s) — ${ordenesReasignadas} orden(es) reasignada(s)`);
 }
 
 // Vincula (o crea) el cliente dueño de una orden, buscando por teléfono y luego por nombre.
@@ -1387,12 +1462,12 @@ function renderPorCliente(lista) {
     const ords = grupos[nombre];
     const saldoPend = ords.filter(o=>(o.estado||'').toUpperCase()==='PENDIENTE')
       .reduce((s,o)=>s+(o.total||0)-(o.a_cuenta_total||0), 0);
-    const groupId = 'cg_' + btoa(nombre).replace(/[^a-zA-Z0-9]/g,'').slice(0,12);
+    const groupId = 'cg_' + hashId(nombre);
     const badgePend = saldoPend > 0
       ? `<span class="cg-badge pending">Por cobrar ${fmt(saldoPend)}</span>`
       : `<span class="cg-badge ok">✓ Al corriente</span>`;
     return `<div class="cliente-group">
-      <div class="cliente-group-header" onclick="toggleClienteGroup('${groupId}')">
+      <div class="cliente-group-header" onclick="toggleClienteGroup(${jsa(groupId)})">
         <div class="cliente-group-name"><span class="icon">👤</span><span class="nombre">${esc(nombre)}</span></div>
         <div class="cliente-group-stats">
           <span class="cg-badge count">${ords.length} orden${ords.length!==1?'es':''}</span>
@@ -1432,29 +1507,29 @@ function ordenCard(o) {
   const estadoPicker = archivada ? '' : `
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:5px;margin-top:12px">Cambiar estado</div>
       <div class="estado-picker">
-        <button class="estado-opt pendiente ${est==='PENDIENTE'?'sel':''}" onclick="cambiarEstado('${o.id}','PENDIENTE')">Pendiente</button>
-        <button class="estado-opt en_proceso ${est==='EN_PROCESO'?'sel':''}" onclick="cambiarEstado('${o.id}','EN_PROCESO')">En proceso</button>
-        <button class="estado-opt pagado ${est==='PAGADO'?'sel':''}" onclick="cambiarEstado('${o.id}','PAGADO')">Pagado</button>
-        <button class="estado-opt termo ${est==='TERMO'?'sel':''}" onclick="cambiarEstado('${o.id}','TERMO')">Termo</button>
+        <button class="estado-opt pendiente ${est==='PENDIENTE'?'sel':''}" onclick="cambiarEstado(${jsa(o.id)},'PENDIENTE')">Pendiente</button>
+        <button class="estado-opt en_proceso ${est==='EN_PROCESO'?'sel':''}" onclick="cambiarEstado(${jsa(o.id)},'EN_PROCESO')">En proceso</button>
+        <button class="estado-opt pagado ${est==='PAGADO'?'sel':''}" onclick="cambiarEstado(${jsa(o.id)},'PAGADO')">Pagado</button>
+        <button class="estado-opt termo ${est==='TERMO'?'sel':''}" onclick="cambiarEstado(${jsa(o.id)},'TERMO')">Termo</button>
       </div>`;
   const acciones = archivada
-    ? `<div class="orden-actions"><button class="btn btn-green btn-sm" onclick="verBoleta('${o.id}')">🧾 Boleta</button></div>`
+    ? `<div class="orden-actions"><button class="btn btn-green btn-sm" onclick="verBoleta(${jsa(o.id)})">🧾 Boleta</button></div>`
     : `<div class="orden-actions">
-        <button class="btn btn-green btn-sm" onclick="verBoleta('${o.id}')">🧾 Boleta</button>
-        ${saldo>0 ? `<button class="btn btn-primary btn-sm" onclick="abrirModalAbono('${o.id}')">💰 Abonar</button>` : ''}
-        <button class="btn btn-ghost btn-sm" onclick="editarOrden('${o.id}')">✏️ Editar</button>
-        <button class="btn btn-danger btn-sm" onclick="eliminarOrden('${o.id}')">🗑️ Borrar</button>
+        <button class="btn btn-green btn-sm" onclick="verBoleta(${jsa(o.id)})">🧾 Boleta</button>
+        ${saldo>0 ? `<button class="btn btn-primary btn-sm" onclick="abrirModalAbono(${jsa(o.id)})">💰 Abonar</button>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="editarOrden(${jsa(o.id)})">✏️ Editar</button>
+        <button class="btn btn-danger btn-sm" onclick="eliminarOrden(${jsa(o.id)})">🗑️ Borrar</button>
       </div>`;
-  return `<div class="orden-card" id="ord-${o.id}">
-    <div class="orden-header" onclick="toggleOrden('${o.id}')">
+  return `<div class="orden-card" id="ord-${esc(o.id)}">
+    <div class="orden-header" onclick="toggleOrden(${jsa(o.id)})">
       <div><div class="orden-title">${esc(o.vehiculo||'—')} · <span style="color:var(--muted)">${esc(o.cliente||'—')}</span></div>
       <div class="orden-sub">${prods.length} servicio(s) · 📅 ${esc(o.fecha_instalacion||'sin fecha')}</div></div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
-        <span class="estado-badge ${est.toLowerCase()}">${ESTADO_LABELS[est]||est}</span>
+        <span class="estado-badge ${ESTADO_LABELS[est]?est.toLowerCase():''}">${esc(ESTADO_LABELS[est]||est)}</span>
         ${badgeArchivada}
       </div>
     </div>
-    <div class="orden-body" id="body-${o.id}">
+    <div class="orden-body" id="body-${esc(o.id)}">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">Servicios</div>
       ${prods.map(p=>`<div class="producto-row"><span class="producto-nombre">${esc(p.nombre)}</span><span class="producto-costo">${fmt(p.costo)}</span></div>`).join('')}
       <div class="orden-totales">
@@ -1507,7 +1582,7 @@ function renderClientes() {
 
 function clienteCard(c) {
   const { count, total, saldo } = statsCliente(c);
-  return `<div class="orden-card" onclick="verClienteDetalle('${c.id}')">
+  return `<div class="orden-card" onclick="verClienteDetalle(${jsa(c.id)})">
     <div class="orden-header">
       <div><div class="orden-title">👤 ${esc(c.nombre||'—')}</div>
       <div class="orden-sub">${esc(c.telefono||'sin teléfono')} · ${count} orden${count!==1?'es':''}</div></div>
@@ -1573,7 +1648,7 @@ async function submitCliente() {
       fecha_creacion: Date.now()
     };
     if (editandoClienteId) cliente.id = editandoClienteId;
-    await guardarCliente(cliente);
+    if (!(await guardarCliente(cliente))) return;
     toast('✅ Cliente guardado');
     cerrarModalCliente();
   } finally {
@@ -1599,10 +1674,10 @@ function verClienteDetalle(id) {
       ${waHref?`<a class="btn btn-green btn-sm" href="${waHref}" target="_blank" rel="noopener">💬 WhatsApp</a>`:''}
     </div>` : ''}
     ${c.notas ? `<div class="nota-box" style="background:var(--surface2);border-left:3px solid var(--accent);padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:16px">${esc(c.notas)}</div>` : ''}
-    <button class="btn btn-primary" style="width:100%;margin-bottom:8px" onclick="verEstadoCuenta('${c.id}')">📤 Enviar estado de cuenta</button>
+    <button class="btn btn-primary" style="width:100%;margin-bottom:8px" onclick="verEstadoCuenta(${jsa(c.id)})">📤 Enviar estado de cuenta</button>
     <div style="display:flex;gap:8px;margin-bottom:20px">
-      <button class="btn btn-ghost btn-sm" onclick="abrirModalCliente('${c.id}')">✏️ Editar</button>
-      <button class="btn btn-danger btn-sm" onclick="eliminarCliente('${c.id}')">🗑️ Eliminar</button>
+      <button class="btn btn-ghost btn-sm" onclick="abrirModalCliente(${jsa(c.id)})">✏️ Editar</button>
+      <button class="btn btn-danger btn-sm" onclick="eliminarCliente(${jsa(c.id)})">🗑️ Eliminar</button>
     </div>
     <div class="form-section">Historial de órdenes</div>
     ${ords.length ? ords.map(o=>ordenCard(o)).join('') : '<div class="empty" style="padding:24px"><div class="empty-text">Sin órdenes aún</div></div>'}
@@ -1779,9 +1854,9 @@ function buildFormHTML(orden) {
   <div class="form-section">Pagos y estado</div>
   <div class="form-row cols-3">
     <div class="form-group"><label class="form-label">Total <span style="color:var(--green);font-size:10px">● AUTO</span></label>
-      <input class="form-input" type="number" id="f-total" placeholder="Auto" value="${o.total||''}" style="color:var(--accent2);font-weight:700"></div>
+      <input class="form-input" type="number" id="f-total" placeholder="Auto" value="${esc(o.total||'')}" style="color:var(--accent2);font-weight:700"></div>
     <div class="form-group"><label class="form-label">A cuenta</label>
-      <input class="form-input" type="number" id="f-a-cuenta" placeholder="0" value="${o.a_cuenta_total||''}"></div>
+      <input class="form-input" type="number" id="f-a-cuenta" placeholder="0" value="${esc(o.a_cuenta_total||'')}"></div>
     <div class="form-group"><label class="form-label">Estado</label>
       <select class="form-select" id="f-estado">
         <option value="PENDIENTE" ${(o.estado||'PENDIENTE')==='PENDIENTE'?'selected':''}>Pendiente</option>
@@ -1808,9 +1883,9 @@ function productoRowHTML(p,i) {
     </div>
     <div class="form-row cols-3">
       <div class="form-group"><label class="form-label">Costo ($)</label>
-        <input class="form-input prod-costo" type="number" placeholder="0" value="${p.costo||''}" oninput="calcGanancia(this)"></div>
+        <input class="form-input prod-costo" type="number" placeholder="0" value="${esc(p.costo||'')}" oninput="calcGanancia(this)"></div>
       <div class="form-group"><label class="form-label">Inversión ($)</label>
-        <input class="form-input prod-inversion" type="number" placeholder="0" value="${p.inversion||''}" oninput="calcGanancia(this)"></div>
+        <input class="form-input prod-inversion" type="number" placeholder="0" value="${esc(p.inversion||'')}" oninput="calcGanancia(this)"></div>
       <div class="form-group"><label class="form-label">Garantía</label>
         <select class="form-select prod-garantia">
           <option value="" ${!p.garantia?'selected':''}>Sin garantía</option>
@@ -1903,6 +1978,12 @@ async function submitOrden() {
   if (!vehiculo || !cliente) { toast('⚠️ Vehículo y cliente son obligatorios'); return; }
   const prods = leerProductos();
   if (!prods.length) { toast('⚠️ Agrega al menos un servicio'); return; }
+  const totalF = parseFloat(root.querySelector('#f-total')?.value) || 0;
+  const aCuentaF = parseFloat(root.querySelector('#f-a-cuenta')?.value) || 0;
+  if (totalF < 0 || aCuentaF < 0 || prods.some(p => (p.costo||0) < 0 || (p.inversion||0) < 0)) {
+    toast('⚠️ Los montos no pueden ser negativos'); return;
+  }
+  if (aCuentaF > totalF + 0.01) { toast('⚠️ "A cuenta" no puede ser mayor que el total'); return; }
   _guardandoOrden = true;
   try {
     const cliente_id = await resolverClienteId(cliente, telefono);
@@ -1910,23 +1991,23 @@ async function submitOrden() {
       vehiculo, cliente, telefono, cliente_id,
       fecha_instalacion: root.querySelector('#f-fecha-inst')?.value || '',
       fecha_pago: root.querySelector('#f-fecha-pago')?.value || '',
-      total: parseFloat(root.querySelector('#f-total')?.value) || 0,
-      a_cuenta_total: parseFloat(root.querySelector('#f-a-cuenta')?.value) || 0,
+      total: Math.round(totalF * 100) / 100,
+      a_cuenta_total: Math.round(aCuentaF * 100) / 100,
       estado: root.querySelector('#f-estado')?.value || 'PENDIENTE',
       recordatorios: root.querySelector('#f-recordatorios')?.value?.trim() || '',
       productos: prods
     };
     if (editandoId) orden.id = editandoId;
-    await guardarOrden(orden);
+    const res = await guardarOrden(orden, editandoId ? _editBase : null);
     if (activeFormMount === 'modal') cerrarModal();
     else {
       document.getElementById('form-nueva-wrapper').innerHTML = '';
       activeFormMount = null;
       showTab('ordenes');
     }
-    toast('✅ Orden guardada');
-    editandoId = null;
-  } catch(e) { /* toast ya mostrado en guardarOrden */ }
+    toast(res === 'pendiente' ? '☁️ Orden guardada en este dispositivo — se subirá al volver la señal' : '✅ Orden guardada');
+    editandoId = null; _editBase = null;
+  } catch(e) { /* toast ya mostrado en guardarOrden; el formulario queda abierto */ }
   finally { _guardandoOrden = false; }
 }
 
@@ -1940,6 +2021,7 @@ function editarOrden(id) {
   const o = ordenes.find(x => x.id === id);
   if (!o) return;
   editandoId = id;
+  _editBase = { a_cuenta_total: o.a_cuenta_total || 0, estado: o.estado || 'PENDIENTE' };
   document.getElementById('modal-title').textContent = 'Editar Orden';
   mountOrdenForm(o, 'modal');
 }
@@ -1956,8 +2038,8 @@ function cerrarModal() {
 function buildCotFormHTML() {
   cotFolioRegistrado = false;
   const folio='COT-'+new Date().getFullYear()+'-'+String(cotFolioNum).padStart(3,'0');
-  const hoy=new Date().toISOString().split('T')[0];
-  const vigencia=new Date(Date.now()+15*24*60*60*1000).toISOString().split('T')[0];
+  const hoy=fechaLocalISO();
+  const vigencia=fechaLocalISO(Date.now()+15*24*60*60*1000);
   return `
   <div class="form-section">Datos del cliente</div>
   <div class="form-row cols-2">
@@ -1970,12 +2052,12 @@ function buildCotFormHTML() {
     <input class="form-input" id="c-direccion" placeholder="Dirección del cliente"></div>
   <div class="form-row cols-2">
     <div class="form-group"><label class="form-label">No. Cotización</label>
-      <input class="form-input" id="c-folio" value="${folio}"></div>
+      <input class="form-input" id="c-folio" value="${esc(folio)}"></div>
     <div class="form-group"><label class="form-label">Fecha</label>
-      <input class="form-input" type="date" id="c-fecha" value="${hoy}"></div>
+      <input class="form-input" type="date" id="c-fecha" value="${esc(hoy)}"></div>
   </div>
   <div class="form-group" style="margin-bottom:12px"><label class="form-label">Válida hasta</label>
-    <input class="form-input" type="date" id="c-vigencia" value="${vigencia}"></div>
+    <input class="form-input" type="date" id="c-vigencia" value="${esc(vigencia)}"></div>
   <div class="form-section">Descripción del proyecto</div>
   <div class="form-group" style="margin-bottom:12px">
     <textarea class="form-textarea" id="c-descripcion" rows="3" placeholder="Describe brevemente el alcance del servicio..." style="resize:vertical"></textarea></div>
@@ -2053,15 +2135,15 @@ function cotPartidaHTML(p,i) {
       <div class="form-group"><label class="form-label">Marca / Modelo</label>
         <input class="form-input cot-pmarca" placeholder="Marca" value="${esc(p.marca||'')}"></div>
       <div class="form-group"><label class="form-label">Cant.</label>
-        <input class="form-input cot-pcant" type="number" value="${p.cant||1}" min="1" step="1" oninput="calcPartida(this);recalcCot()"></div>
+        <input class="form-input cot-pcant" type="number" value="${esc(p.cant||1)}" min="1" step="1" oninput="calcPartida(this);recalcCot()"></div>
       <div class="form-group"><label class="form-label">P. Unitario ($)</label>
-        <input class="form-input cot-pprecio" type="number" placeholder="0" value="${p.precio||''}" oninput="calcPartida(this);recalcCot()"></div>
+        <input class="form-input cot-pprecio" type="number" placeholder="0" value="${esc(p.precio||'')}" oninput="calcPartida(this);recalcCot()"></div>
     </div>
     <div class="form-row cols-2">
       <div class="form-group"><label class="form-label">Dscto. %</label>
-        <input class="form-input cot-pdescto" type="number" value="${p.descto||0}" min="0" max="100" oninput="calcPartida(this);recalcCot()"></div>
+        <input class="form-input cot-pdescto" type="number" value="${esc(p.descto||0)}" min="0" max="100" oninput="calcPartida(this);recalcCot()"></div>
       <div class="form-group"><label class="form-label">Subtotal</label>
-        <input class="form-input cot-psubtotal" type="number" readonly value="${sub||''}" style="color:var(--accent2);font-weight:700;background:var(--surface)"></div>
+        <input class="form-input cot-psubtotal" type="number" readonly value="${esc(sub||'')}" style="color:var(--accent2);font-weight:700;background:var(--surface)"></div>
     </div>
   </div>`;
 }
@@ -2138,18 +2220,48 @@ function leerPartidas() {
   })).filter(p=>p.nombre && (p.precio >= 0));
 }
 
-function verCotizacion() {
+const _folioCot = n => 'COT-' + new Date().getFullYear() + '-' + String(n).padStart(3,'0');
+
+// Reserva el siguiente número de cotización en un contador compartido
+// (usuarios/compartido/contadores/cotizaciones). Antes el contador vivía en
+// el localStorage de cada teléfono y dos teléfonos generaban el mismo folio.
+// Sin señal se usa el contador local, como antes.
+async function _reservarFolioCot() {
+  if (window._useFirebase && window._firebaseDb && window._uid && navigator.onLine) {
+    try {
+      const { runTransaction, doc } = window._firebaseModules;
+      const ref = doc(window._firebaseDb, 'usuarios', window._uid, 'contadores', 'cotizaciones');
+      let n = 0;
+      await runTransaction(window._firebaseDb, async tx => {
+        const snap = await tx.get(ref);
+        // max con el contador local: al migrar no se repite ningún folio ya emitido en este teléfono
+        n = Math.max(((snap.exists() && snap.data().ultimo) || 0) + 1, cotFolioNum);
+        tx.set(ref, { ultimo: n, fecha: Date.now() });
+      });
+      cotFolioNum = n + 1; localStorage.setItem('cot_folio', cotFolioNum);
+      return n;
+    } catch(e) { console.warn('Folio compartido no disponible, se usa el local:', e); }
+  }
+  const n = cotFolioNum;
+  cotFolioNum++; localStorage.setItem('cot_folio', cotFolioNum);
+  return n;
+}
+
+async function verCotizacion() {
   const cliente=document.getElementById('c-cliente')?.value?.trim();
   if(!cliente){toast('⚠️ El nombre del cliente es obligatorio');return;}
   const nums=recalcCot();
   const partidas=leerPartidas();
-  const folio=document.getElementById('c-folio')?.value||'';
-  const fecha=document.getElementById('c-fecha')?.value||'';
-  const vigencia=document.getElementById('c-vigencia')?.value||'';
+  const folioEl=document.getElementById('c-folio');
   if (!cotFolioRegistrado) {
     cotFolioRegistrado = true;
-    cotFolioNum++; localStorage.setItem('cot_folio', cotFolioNum);
+    // Solo se asigna folio automático si el usuario no escribió uno propio.
+    if (folioEl && folioEl.value === folioEl.defaultValue) folioEl.value = _folioCot(await _reservarFolioCot());
+    else { cotFolioNum++; localStorage.setItem('cot_folio', cotFolioNum); }
   }
+  const folio=folioEl?.value||'';
+  const fecha=document.getElementById('c-fecha')?.value||'';
+  const vigencia=document.getElementById('c-vigencia')?.value||'';
 
   const bodyHTML =
     headerEmpresa('COTIZACIÓN', folio, fecha)
@@ -2283,7 +2395,10 @@ window.addEventListener('firebaseReady', () => {
 });
 document.addEventListener('DOMContentLoaded', () => {
   // Respaldo: si por algún motivo 'firebaseReady' no llegó en 300ms, arranca igual
-  setTimeout(() => { if (!_appInitialized) { showApp(); _appInitialized = true; initAppData(); } }, 300);
+  // No arranca en modo local si se está esperando el inicio de sesión.
+  setTimeout(() => { if (!_appInitialized && !window._authPendiente) { showApp(); _appInitialized = true; initAppData(); } }, 300);
+  // Si el SDK de Firebase no cargó en absoluto (sin señal y sin caché), arrancar con la copia local.
+  setTimeout(() => { if (!_appInitialized && !window._firebaseInitRan) { showApp(); _appInitialized = true; initAppData(); } }, 8000);
   document.addEventListener('click', e => {
     if (e.target.closest('[data-action="add-servicio"]')) {
       e.preventDefault();
@@ -2522,7 +2637,7 @@ async function exportarM365() {
     await _ensureXLSX();
 
     const buffer = _buildExcelBuffer();
-    const mes = new Date().toISOString().slice(0, 7);
+    const mes = fechaLocalISO().slice(0, 7);
     const filename = `AlarmasReset-${mes}.xlsx`;
 
     toast('⏳ Subiendo a OneDrive...');
@@ -2645,7 +2760,7 @@ function cargarLogsExport() {
 // ── Auto-exportación día 30 (sin intervención si ya hay sesión) ──
 async function intentarAutoExportM365() {
   const hoy = new Date();
-  const mes = hoy.toISOString().slice(0,7);
+  const mes = fechaLocalISO(hoy).slice(0,7);
   const ultimoExport = localStorage.getItem('m365_ultimo_export');
   const clientId = localStorage.getItem('m365_client_id');
   const ultimoDia = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0).getDate();
@@ -2695,7 +2810,7 @@ async function intentarAutoExportM365() {
 // ── Banner día 30 ─────────────────────────────────────
 function checkBannerExport() {
   const hoy = new Date();
-  const mes = hoy.toISOString().slice(0,7);
+  const mes = fechaLocalISO(hoy).slice(0,7);
   const ultimoExport = localStorage.getItem('m365_ultimo_export');
   const diasRestantes = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0).getDate() - hoy.getDate();
   const banner = document.getElementById('export-banner');
@@ -2740,26 +2855,70 @@ function _confirmCancel() {
 async function cambiarEstado(id, nuevoEstado) {
   const orden = ordenes.find(o => o.id === id);
   if (!orden || (orden.estado||'PENDIENTE').toUpperCase() === nuevoEstado) return;
+  if (!ESTADO_LABELS[nuevoEstado]) return;
+  // Marcar PAGADO con saldo pendiente dejaba la orden "Pagada" pero con
+  // deuda (y registraba el total como ingreso). Ahora se liquida el saldo
+  // como un abono normal, que a su vez marca PAGADO y registra el ingreso.
+  if (nuevoEstado === 'PAGADO') {
+    const saldo = Math.round(((orden.total||0) - (orden.a_cuenta_total||0)) * 100) / 100;
+    if (saldo > 0.01) {
+      const ok = await confirmarAccion('Marcar como pagada',
+        `Esta orden tiene un saldo pendiente de ${fmt(saldo)}. ¿Registrarlo como pagado ahora?`, '💰', 'Registrar pago');
+      if (!ok) return;
+      await abonarOrden(id, saldo);
+      return;
+    }
+  }
   const estadoAnterior = orden.estado;
   orden.estado = nuevoEstado;
-  if (nuevoEstado === 'PAGADO') _registrarIngresoOrden(orden);
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
-      const { updateDoc } = window._firebaseModules;
-      await updateDoc(docOrden(id), { estado: nuevoEstado });
-      toast('✅ Estado: ' + (ESTADO_LABELS[nuevoEstado] || nuevoEstado));
+      const { updateDoc, runTransaction } = window._firebaseModules;
+      renderAll();
+      let res = 'ok';
+      const ref = docOrden(id);
+      const estadoVisto = (estadoAnterior || 'PENDIENTE').toUpperCase();
+      try {
+        if (!navigator.onLine) throw Object.assign(new Error('offline'), { code: 'unavailable' });
+        // Con señal: solo se cambia si el servidor sigue en el estado que se
+        // veía en pantalla. Evita que una lista desactualizada revierta, por
+        // ejemplo, un Pagado que otro teléfono acaba de registrar.
+        await runTransaction(window._firebaseDb, async tx => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) throw new Error('ORDEN_NO_EXISTE');
+          const actual = (snap.data().estado || 'PENDIENTE').toUpperCase();
+          if (actual !== estadoVisto) throw Object.assign(new Error('ESTADO_CAMBIADO'), { actual });
+          tx.update(ref, { estado: nuevoEstado });
+        });
+      } catch(e) {
+        if (e.message === 'ESTADO_CAMBIADO') {
+          orden.estado = e.actual; renderAll();
+          toast('⚠️ Otro dispositivo ya cambió esta orden a ' + (ESTADO_LABELS[e.actual] || e.actual) + '. Revisa antes de cambiarla.');
+          return;
+        }
+        if (e.message === 'ORDEN_NO_EXISTE') { orden.estado = estadoAnterior; renderAll(); toast('⚠️ Esta orden ya no existe'); return; }
+        if (e.code !== 'unavailable' && e.code !== 'failed-precondition') throw e;
+        // Sin señal: se guarda en la cola persistente (sin verificación posible).
+        res = await window._fsEscribir(updateDoc(ref, { estado: nuevoEstado }));
+      }
+      // El ingreso se registra solo después de que la escritura fue aceptada
+      // (o quedó en la cola persistente), y _registrarIngresoOrden evita
+      // contarlo dos veces si la orden se pasa a Pagado más de una vez.
+      if (nuevoEstado === 'PAGADO') _registrarIngresoOrden(orden);
+      toast((res === 'pendiente' ? '☁️ Estado guardado sin señal: ' : '✅ Estado: ') + ESTADO_LABELS[nuevoEstado]);
       return;
     } catch(e) {
       console.error(e);
       orden.estado = estadoAnterior;
       renderAll();
-      toast('⚠️ No se pudo actualizar — sin conexión');
+      toast('⚠️ No se pudo actualizar el estado: ' + (e.code || e.message || e));
       return;
     }
   }
+  if (nuevoEstado === 'PAGADO') _registrarIngresoOrden(orden);
   await guardarLocal();
   renderAll();
-  toast('✅ Estado: ' + (ESTADO_LABELS[nuevoEstado] || nuevoEstado));
+  toast('✅ Estado: ' + ESTADO_LABELS[nuevoEstado]);
   setTimeout(() => {
     const body = document.getElementById('body-' + id);
     if (body) body.classList.add('open');
@@ -2788,10 +2947,10 @@ function abrirModalAbono(id) {
     </div>
     <div class="form-group" style="margin-bottom:20px">
       <label class="form-label">Monto del abono</label>
-      <input class="form-input" id="abono-monto" type="number" step="0.01" min="0.01" max="${saldo}" placeholder="0" value="${saldo}">
+      <input class="form-input" id="abono-monto" type="number" step="0.01" min="0.01" max="${esc(saldo)}" placeholder="0" value="${esc(saldo)}">
     </div>
     <div style="display:flex;gap:10px;margin-bottom:${abonosPrevios?'20px':'0'}">
-      <button class="btn btn-primary" style="flex:1" onclick="submitAbono('${id}')">💰 Registrar abono</button>
+      <button class="btn btn-primary" style="flex:1" onclick="submitAbono(${jsa(id)})">💰 Registrar abono</button>
       <button class="btn btn-ghost" onclick="cerrarModalCliente()">Cancelar</button>
     </div>
     ${abonosPrevios ? `<div class="form-section">Abonos anteriores</div>${abonosPrevios}` : ''}
@@ -2825,7 +2984,8 @@ async function abonarOrden(id, monto) {
   const saldoPrevio = total - aCuentaPrevio;
   if (monto > saldoPrevio + 0.01) { toast('⚠️ El monto excede el saldo pendiente (' + fmt(saldoPrevio) + ')'); return false; }
 
-  const abono = { monto, fecha: Date.now() };
+  monto = Math.round(monto * 100) / 100;
+  const abono = { monto, fecha: Date.now(), id: 'ab_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6) };
 
   // Aplica el abono localmente (optimista) y registra el ingreso solo si
   // esta llamada es la que efectivamente salda la orden — se hace una vez
@@ -2880,15 +3040,23 @@ async function abonarOrden(id, monto) {
         return false;
       }
       console.error(e);
-      // Sin conexión / falla de red: aplica el abono local igual que
-      // guardarOrden() y lo encola para reintentar cuando vuelva la señal,
-      // en vez de perderlo (antes el catch revertía el estado y el abono
-      // desaparecía sin quedar en ninguna cola).
-      const pasaAPagado = _aplicarLocal(aCuentaPrevio + monto, (total - (aCuentaPrevio + monto)) <= 0.01 ? 'PAGADO' : orden.estado);
-      _addToOfflineQueue({ tipo: 'guardar', orden: {...orden} });
-      await guardarLocal();
+      if (e.code && e.code !== 'unavailable' && e.code !== 'failed-precondition') {
+        toast('⚠️ No se pudo registrar el abono: ' + (e.code || e.message));
+        return false;
+      }
+      // Sin conexión: se manda como transformación atómica (increment +
+      // arrayUnion). Firestore la guarda en su cola persistente —sobrevive a
+      // cerrar la app— y al subirla la SUMA a lo que haya en el servidor, en
+      // vez de sobrescribir la orden completa con una copia vieja (que
+      // borraba abonos/ediciones hechas desde otros dispositivos).
+      const { updateDoc, increment, arrayUnion } = window._firebaseModules;
+      const saldaLocal = (total - (aCuentaPrevio + monto)) <= 0.01;
+      const upd = { a_cuenta_total: increment(monto), abonos: arrayUnion(abono) };
+      if (saldaLocal) upd.estado = 'PAGADO';
+      window._fsEscribir(updateDoc(docOrden(id), upd), 0);
+      const pasaAPagado = _aplicarLocal(aCuentaPrevio + monto, saldaLocal ? 'PAGADO' : orden.estado);
       renderAll();
-      toast('☁️ Sin conexión — abono guardado en este dispositivo, se sincronizará solo' + (pasaAPagado?' (orden PAGADA)':''));
+      toast('☁️ Sin conexión — abono guardado en este dispositivo, se subirá solo' + (pasaAPagado?' (orden PAGADA)':''));
       return true;
     }
   }
@@ -2909,8 +3077,11 @@ function _registrarIngresoOrden(orden) {
     current.movimientos = current.movimientos || [];
     const monto = orden.total || 0;
     if (monto <= 0) return;
+    // Una orden solo genera un ingreso: antes, pasar Pagado → Pendiente →
+    // Pagado sumaba el total dos veces.
+    if (orden.id && current.movimientos.some(m => m.ordenId === orden.id)) return;
     current.movimientos.unshift({
-      id: Date.now(), tipo: 'ganancia', monto,
+      id: Date.now(), tipo: 'ganancia', monto, ordenId: orden.id || null,
       desc: 'Orden pagada: ' + (orden.vehiculo||'') + ' — ' + (orden.cliente||''),
       fecha: new Date().toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})
     });
@@ -3099,6 +3270,17 @@ function respaldoJSON() {
   toast('✅ Respaldo JSON descargado');
 }
 
+async function cerrarSesionApp() {
+  closeSidebar();
+  if (typeof window.cerrarSesion !== 'function') { toast('No hay sesión iniciada'); return; }
+  const ok = await confirmarAccion('Cerrar sesión', '¿Cerrar sesión en este dispositivo? Necesitarás tu correo y contraseña (y señal) para volver a entrar.', '🚪', 'Cerrar sesión');
+  if (ok) window.cerrarSesion();
+}
+window.addEventListener('firebaseReady', () => {
+  const el = document.getElementById('si-auth-email');
+  if (el && window._authUser) el.textContent = window._authUser.email || '';
+});
+
 function restaurarJSON() {
   closeSidebar();
   document.getElementById('json-restore-input').click();
@@ -3114,24 +3296,37 @@ function procesarRestaurarJSON(event) {
       const data = JSON.parse(e.target.result);
       const nuevas = data.ordenes || (Array.isArray(data) ? data : null);
       if (!nuevas || !Array.isArray(nuevas)) { toast('⚠️ Formato de archivo inválido'); return; }
-      const ok = await confirmarAccion('Restaurar respaldo', '¿Restaurar ' + nuevas.length + ' órdenes? Se reemplazarán los datos actuales.', '📂', 'Restaurar');
+      const enNube = !!(window._useFirebase && window._firebaseDb && window._uid);
+      const ok = await confirmarAccion('Restaurar respaldo',
+        '¿Restaurar ' + nuevas.length + ' órdenes? Las órdenes del archivo sobrescriben a las que tengan el mismo ID; las demás órdenes actuales se conservan.',
+        '📂', 'Restaurar');
       if (!ok) return;
+      if (enNube) {
+        // Mismo ID que en el respaldo (setDoc): restaurar dos veces el mismo
+        // archivo ya no duplica órdenes. Se avisa solo al terminar.
+        const { writeBatch, doc } = window._firebaseModules;
+        let pendiente = false;
+        try {
+          for (let i = 0; i < nuevas.length; i += 400) {
+            const batch = writeBatch(window._firebaseDb);
+            for (const orden of nuevas.slice(i, i + 400)) {
+              const d = {...orden}; const id = d.id; delete d.id;
+              batch.set(id && !String(id).startsWith('local_') ? docOrden(String(id)) : doc(colOrdenes()), d);
+            }
+            if ((await window._fsEscribir(batch.commit(), 15000)) === 'pendiente') pendiente = true;
+          }
+        } catch(err) {
+          console.error(err);
+          toast('⚠️ No se pudo restaurar en la nube: ' + (err.code || err.message || err));
+          return;
+        }
+        toast(pendiente ? '☁️ Respaldo guardado sin señal — se subirá al volver la conexión' : '✅ ' + nuevas.length + ' órdenes restauradas');
+        return;
+      }
       ordenes = nuevas;
-      guardarLocal();
+      await guardarLocal();
       renderAll();
       toast('✅ ' + nuevas.length + ' órdenes restauradas');
-      // Si Firebase está activo, subir también para evitar que onSnapshot sobreescriba
-      if (window._useFirebase && window._firebaseDb && window._uid) {
-        try {
-          const { addDoc, updateDoc } = window._firebaseModules;
-          for (const orden of nuevas) {
-            const d = {...orden}; const id = d.id; delete d.id;
-            if (id) await updateDoc(docOrden(id), d).catch(() => addDoc(colOrdenes(), d));
-            else await addDoc(colOrdenes(), d);
-          }
-          toast('☁️ Respaldo sincronizado con Firebase');
-        } catch(err) { toast('⚠️ Local OK — Firebase no disponible'); }
-      }
     } catch(err) {
       toast('⚠️ Error al leer el archivo: ' + err.message);
     }
@@ -3176,8 +3371,7 @@ async function checkAndRotateMonthOrders(_intentos) {
   const archivables = ordenes.filter(o => {
     const e = (o.estado||'').toUpperCase();
     if (e !== 'PAGADO' && e !== 'TERMO') return false;
-    const fechaOrden = o.fecha_instalacion || (o.fecha_creacion ? new Date(o.fecha_creacion).toISOString() : '');
-    const mesOrden = (fechaOrden || '').slice(0, 7);
+    const mesOrden = _mesDeOrden(o);
     return mesOrden && mesOrden < mesActual;
   });
   if (!archivables.length) {
@@ -3192,42 +3386,76 @@ async function checkAndRotateMonthOrders(_intentos) {
     `Hay ${archivables.length} orden(es) PAGADA(S)/TERMO de ${mesLabel}. ¿Archivarlas para limpiar la lista activa?`,
     '📦', 'Archivar'
   );
-  if (ok) await archivarOrdenesDelMes(ultimoMes || mesActual, archivables);
+  // Solo se marca el mes como revisado si el archivado terminó bien; si
+  // falló, se vuelve a ofrecer en el próximo arranque.
+  if (ok && !(await archivarOrdenesDelMes(archivables))) return;
   localStorage.setItem(ORDENES_MES_KEY, mesActual);
 }
 
-async function archivarOrdenesDelMes(mes, archivables) {
-  const hist = JSON.parse(localStorage.getItem(ORDENES_HIST_KEY)||'[]');
-  const idx = hist.findIndex(h=>h.mes===mes);
-  const entrada = {
-    mes,
-    ordenes: archivables,
-    archivadasEn: new Date().toISOString(),
-    total: archivables.reduce((s,o)=>s+(o.total||0),0)
-  };
-  if (idx >= 0) hist[idx] = entrada;
-  else hist.unshift(entrada);
-  localStorage.setItem(ORDENES_HIST_KEY, JSON.stringify(hist));
+// Mes (AAAA-MM, hora local) al que pertenece una orden.
+function _mesDeOrden(o) {
+  if (o.fecha_instalacion) return String(o.fecha_instalacion).slice(0, 7);
+  if (!o.fecha_creacion) return '';
+  const d = new Date(o.fecha_creacion);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+}
 
-  ordenes = ordenes.filter(o => {
-    const e = (o.estado||'').toUpperCase();
-    return e !== 'PAGADO' && e !== 'TERMO';
-  });
-  guardarLocal();
-  renderAll();
+// Antes: un solo documento por mes con TODAS las órdenes (podía pasar de
+// 1 MiB y fallar), el error se tragaba con .catch(()=>{}) y aun así se
+// borraban las órdenes originales. Ahora cada orden se copia a su propio
+// documento de ordenes_archivadas (mismo formato {mes, ordenes:[...]}, así
+// que cargarHistorialOrdenes() lo agrupa igual) y la copia + el borrado van
+// en el mismo writeBatch: o se aplican los dos o ninguno.
+async function archivarOrdenesDelMes(archivables) {
+  const ahora = new Date().toISOString();
+  const entradas = archivables.map(o => ({
+    id: o.id, mes: _mesDeOrden(o), ordenes: [o], archivadasEn: ahora, total: o.total || 0
+  }));
 
   if (window._useFirebase && window._firebaseDb && window._uid) {
+    const { writeBatch, doc } = window._firebaseModules;
     try {
-      const { addDoc, deleteDoc } = window._firebaseModules;
-      await addDoc(colArchivados(), entrada).catch(()=>{});
-      for (const o of archivables) {
-        if (o.id && !o.id.startsWith('local_')) {
-          await deleteDoc(docOrden(o.id)).catch(()=>{});
+      // 2 operaciones por orden; los lotes admiten hasta 500.
+      for (let i = 0; i < entradas.length; i += 200) {
+        const batch = writeBatch(window._firebaseDb);
+        for (const ent of entradas.slice(i, i + 200)) {
+          const { id, ...datos } = ent;
+          if (!id || id.startsWith('local_')) continue;
+          batch.set(doc(colArchivados(), id), datos);
+          batch.delete(docOrden(id));
+        }
+        const res = await window._fsEscribir(batch.commit(), 15000);
+        if (res === 'pendiente') {
+          toast('☁️ Archivado guardado sin señal — se completará al volver la conexión');
+          return true;
         }
       }
-    } catch(e) { console.warn('archivar firebase:', e); }
+    } catch(e) {
+      console.error('archivar firebase:', e);
+      toast('⚠️ No se pudieron archivar las órdenes: ' + (e.code || e.message || e) + '. No se borró nada.');
+      return false;
+    }
   }
+
+  // Copia local del historial (para verlo sin señal) y, en modo local,
+  // quitar de la lista activa SOLO las órdenes archivadas.
+  const hist = JSON.parse(localStorage.getItem(ORDENES_HIST_KEY)||'[]');
+  for (const ent of entradas) {
+    let h = hist.find(x => x.mes === ent.mes);
+    if (!h) { h = { mes: ent.mes, ordenes: [], archivadasEn: ahora, total: 0 }; hist.push(h); }
+    if (!h.ordenes.some(o => o.id === ent.id)) h.ordenes.push(ent.ordenes[0]);
+    h.total = h.ordenes.reduce((t,o)=>t+(o.total||0),0);
+  }
+  hist.sort((a,b)=> b.mes.localeCompare(a.mes));
+  localStorage.setItem(ORDENES_HIST_KEY, JSON.stringify(hist));
+  if (!(window._useFirebase && window._firebaseDb && window._uid)) {
+    const ids = new Set(archivables.map(o => o.id));
+    ordenes = ordenes.filter(o => !ids.has(o.id));
+    await guardarLocal();
+  }
+  renderAll();
   toast('📦 ' + archivables.length + ' órdenes archivadas');
+  return true;
 }
 
 // FIX (ago-2026): el historial de órdenes archivadas (Pagado/Termo de meses
@@ -3241,8 +3469,12 @@ async function archivarOrdenesDelMes(mes, archivables) {
 async function cargarHistorialOrdenes() {
   if (window._useFirebase && window._firebaseDb && window._firebaseModules && window._uid) {
     try {
-      const { getDocs, query, orderBy } = window._firebaseModules;
-      const snap = await getDocs(query(colArchivados(), orderBy('mes','desc')));
+      const { getDocs, query, orderBy, where } = window._firebaseModules;
+      // Solo los últimos 12 meses (lo que muestra la sección de historial);
+      // antes se descargaba todo el archivo en cada arranque.
+      const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 12);
+      const desdeMes = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+      const snap = await getDocs(query(colArchivados(), where('mes', '>=', desdeMes), orderBy('mes','desc')));
       const remotos = snap.docs.map(d=>({id:d.id, ...d.data()}));
       const local = JSON.parse(localStorage.getItem(ORDENES_HIST_KEY)||'[]');
       const porMes = {};
@@ -3295,7 +3527,7 @@ function renderHistorialOrdenes() {
     const label = new Date(h.mes+'-02').toLocaleDateString('es-MX',{month:'long',year:'numeric'});
     const pagadas = (h.ordenes||[]).filter(o=>(o.estado||'').toUpperCase()==='PAGADO').length;
     const termos  = (h.ordenes||[]).filter(o=>(o.estado||'').toUpperCase()==='TERMO').length;
-    return `<div class="historial-mes-card" onclick="verHistorialMes('${h.mes}')">
+    return `<div class="historial-mes-card" onclick="verHistorialMes(${jsa(h.mes)})">
       <div class="historial-mes-info">
         <div class="historial-mes-nombre">${label}</div>
         <div class="historial-mes-stats">${(h.ordenes||[]).length} órdenes · ${pagadas} pagadas · ${termos} termo</div>
@@ -3321,17 +3553,17 @@ function verHistorialMes(mes) {
           ? prods.map(p=>`<div class="producto-row"><span class="producto-nombre">${esc(p.nombre||'—')}${p.garantia?` <span style="color:var(--muted);font-size:11px">(${esc(GARANTIA_LABELS[p.garantia]||p.garantia)})</span>`:''}</span><span class="producto-costo">${fmt(p.costo)}</span></div>`).join('')
           : '<div style="font-size:12px;color:var(--muted)">Sin servicios registrados</div>';
         return `<div class="orden-card" style="margin-bottom:8px">
-          <div class="orden-header" onclick="toggleOrdenHistorial('${o.id}')">
+          <div class="orden-header" onclick="toggleOrdenHistorial(${jsa(o.id)})">
             <div>
               <div class="orden-title">${esc(o.vehiculo||'—')} · ${esc(o.cliente||'—')}</div>
               <div class="orden-sub">${prods.length} servicio(s) · ${esc(o.fecha_instalacion||'')} · <span style="color:var(--accent)">toca para ver los servicios</span></div>
             </div>
             <div style="text-align:right">
-              <span class="estado-badge ${est.toLowerCase()}">${ESTADO_LABELS[est]||est}</span>
+              <span class="estado-badge ${ESTADO_LABELS[est]?est.toLowerCase():''}">${esc(ESTADO_LABELS[est]||est)}</span>
               <div style="font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--green);margin-top:4px">${fmt(o.total||0)}</div>
             </div>
           </div>
-          <div class="orden-body" id="hist-body-${o.id}">
+          <div class="orden-body" id="hist-body-${esc(o.id)}">
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">Servicios realizados</div>
             ${servicios}
           </div>

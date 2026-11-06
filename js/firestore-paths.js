@@ -68,3 +68,36 @@ window.docCita = docCita;
 window.colArchivados = colArchivados;
 window.colGastos = colGastos;
 window.docGasto = docGasto;
+
+// ═══════════════════════════════════════
+// Escrituras que no se quedan colgadas sin señal.
+// Firestore usa caché persistente (IndexedDB): una escritura hecha sin
+// conexión queda guardada en el dispositivo y se sube sola al volver la red,
+// aunque se cierre la app. Pero la promesa de setDoc/updateDoc no se
+// resuelve hasta que el servidor confirma, así que hacer `await` sin red
+// dejaba los modales abiertos indefinidamente. _fsEscribir espera la
+// confirmación unos segundos; si no llega, devuelve 'pendiente' (la
+// escritura ya está en la cola local de Firestore). Un rechazo real del
+// servidor (reglas, datos inválidos) sí se propaga como error si llega a
+// tiempo, y se avisa con toast si llega después.
+// ═══════════════════════════════════════
+function _fsEscribir(promesa, ms = 4000) {
+  let tarde = false;
+  promesa.catch(e => {
+    if (tarde) {
+      console.error('Escritura rechazada por Firestore:', e);
+      window.toast && window.toast('⚠️ Un cambio no se pudo guardar en la nube: ' + (e.code || e.message || e));
+    }
+  });
+  return Promise.race([
+    promesa.then(() => 'ok'),
+    new Promise(res => setTimeout(() => { tarde = true; res('pendiente'); }, ms))
+  ]);
+}
+// Referencia nueva con ID generado en el cliente (sin esperar al servidor).
+function nuevoDoc(col) {
+  const { doc } = window._firebaseModules;
+  return doc(col);
+}
+window._fsEscribir = _fsEscribir;
+window.nuevoDoc = nuevoDoc;

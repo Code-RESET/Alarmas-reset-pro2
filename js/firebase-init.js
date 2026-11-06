@@ -6,9 +6,10 @@
 // del código (aún en index.html) siga funcionando sin cambios.
 // ═══════════════════════════════════════
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot, orderBy, query, limit, getDocs, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot, orderBy, query, limit, getDocs, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, runTransaction, writeBatch, increment, arrayUnion, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getMessaging, getToken, isSupported, onMessage } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js";
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check.js";
+import { protegerConLogin } from "./auth-gate.js?v=22";
 
 // ══════════════════════════════════════════════════
 // 🔥 CONFIGURACIÓN FIREBASE — REEMPLAZA CON TUS DATOS
@@ -37,14 +38,17 @@ const APP_CHECK_SITE_KEY = '6Lc66MUtAAAAAAzD3qsjDRaEV8o-T3l9RFB4D4DG';
 const fbConfigured = firebaseConfig.apiKey && !String(firebaseConfig.apiKey).includes('TU_')
   && firebaseConfig.projectId && !String(firebaseConfig.projectId).includes('TU_');
 window._useFirebase = false;
-// Sin login: todos los dispositivos comparten la misma ruta de datos,
-// protegida solo por reglas de Firestore abiertas (ver README). No se usa
-// Firebase Auth en absoluto — un residuo de sesión de Google guardado en el
-// navegador de una versión anterior ya no puede desviar los datos a otra ruta.
+window._firebaseInitRan = true;
+// Todos los dispositivos comparten la misma ruta de datos
+// (usuarios/compartido/...). El acceso lo controla el inicio de sesión con
+// correo/contraseña (js/auth-gate.js) y las reglas de Firestore, que solo
+// dejan pasar a cuentas registradas en permitidos/{uid}.
 window._uid = 'compartido';
+let _fbApp = null;
 if (fbConfigured) {
   try {
     const app = initializeApp(firebaseConfig);
+    _fbApp = app;
     // Solo se activa si ya pegaste tu clave real arriba — ver comentario de
     // APP_CHECK_SITE_KEY. Envuelto en su propio try/catch para que, si algo
     // sale mal (clave inválida, red, etc.), el resto de la app siga
@@ -68,7 +72,7 @@ if (fbConfigured) {
       localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
     });
     window._firebaseDb = db;
-    window._firebaseModules = { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot, orderBy, query, limit, getDocs, runTransaction };
+    window._firebaseModules = { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot, orderBy, query, limit, getDocs, runTransaction, writeBatch, increment, arrayUnion, where };
     window._useFirebase = true;
 
     // 🔔 Notificaciones push (FCM) — requiere VAPID_KEY configurada arriba.
@@ -108,4 +112,16 @@ if (fbConfigured) {
 // siguiente vuelta del bucle de eventos, momento en el que TODOS los
 // módulos (incluido data-ordenes.js, data-clientes.js, data-citas.js) ya
 // terminaron de ejecutarse, sin excepción.
-setTimeout(() => window.dispatchEvent(new Event('firebaseReady')), 0);
+//
+// Con Firebase activo, 'firebaseReady' espera además a que haya una sesión
+// autorizada (protegerConLogin). window._authPendiente evita que el
+// arranque de respaldo de index.html (300 ms) abra la app en modo local
+// mientras se muestra la pantalla de inicio de sesión.
+if (window._useFirebase && _fbApp) {
+  protegerConLogin(_fbApp, window._firebaseDb, () => {
+    setTimeout(() => window.dispatchEvent(new Event('firebaseReady')), 0);
+  });
+} else {
+  window._authPendiente = false;
+  setTimeout(() => window.dispatchEvent(new Event('firebaseReady')), 0);
+}

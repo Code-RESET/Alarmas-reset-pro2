@@ -13,6 +13,26 @@
 <link rel="icon" type="image/png" sizes="512x512" href="assets/icon-512.png">
 <title>RESET Alarmas y GPS — Cotizaciones</title>
 <script>
+// Login pendiente desde el primer momento: el arranque de respaldo no debe
+// abrir la app en modo local mientras se carga el SDK de Firebase y se pide
+// el inicio de sesión. firebase-init lo apaga si Firebase no se usa.
+window._authPendiente = true;
+
+// Captura global: errores que antes se perdían sin aviso (lista vacía,
+// guardados fallidos) ahora al menos se muestran. Máx. un aviso cada 10 s.
+(function(){
+  let ultimo = 0;
+  function avisar(msg){
+    console.error('[error global]', msg);
+    const ahora = Date.now();
+    if (ahora - ultimo < 10000 || typeof toast !== 'function') return;
+    ultimo = ahora;
+    try { toast('⚠️ Error inesperado: ' + String(msg).slice(0, 120)); } catch(e) {}
+  }
+  window.addEventListener('error', e => { if (e.message) avisar(e.message); });
+  window.addEventListener('unhandledrejection', e => avisar((e.reason && (e.reason.message || e.reason.code)) || e.reason));
+})();
+
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js?v=14').catch(e => console.warn('SW error:', e)));
   }
@@ -30,6 +50,7 @@
     query, orderBy, serverTimestamp,
     initializeFirestore, persistentLocalCache, persistentMultipleTabManager
   } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { protegerConLogin } from "./js/auth-gate.js?v=22";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAOUGIWvrPtdKf9pnoYlh3NIHHiBO_R7mE",
@@ -40,11 +61,15 @@
     appId: "1:1096561116547:web:b13df05c092785723aa2b6"
   };
 
-  // Sin login: todos los dispositivos comparten la misma ruta de datos
-  // (usuarios/compartido/...), igual que index.html — ver README.
+  // Misma ruta compartida que index.html (usuarios/compartido/...). El
+  // inicio de sesión se hace en index.html; aquí solo se verifica que haya
+  // sesión (se comparte entre páginas del mismo sitio) y si no, se redirige.
   window._uid = 'compartido';
+  window._firebaseInitRan = true;
+  let _app = null;
   try {
     const app = initializeApp(firebaseConfig);
+    _app = app;
     // Persistencia offline nativa de Firestore (igual que index.html), para
     // que el catálogo y las finanzas también se puedan leer sin internet.
     const db = initializeFirestore(app, {
@@ -57,7 +82,12 @@
     console.warn('Firebase no disponible:', e);
     window._fbReady = false;
   }
-  window.dispatchEvent(new Event('fbReady'));
+  if (window._fbReady && _app) {
+    protegerConLogin(_app, window._db, () => window.dispatchEvent(new Event('fbReady')), { redirigirA: 'index.html' });
+  } else {
+    window._authPendiente = false;
+    window.dispatchEvent(new Event('fbReady'));
+  }
 </script>
 <style>
 :root {
@@ -1424,13 +1454,13 @@ function renderCustomItems(panel) {
   // Preservar IDs de ítems actualmente seleccionados antes de re-renderizar
   const selIds = new Set([...list.querySelectorAll('.custom-item.sel')].map(el => el.id));
   list.innerHTML = items.map(item => `
-    <div class="custom-item${selIds.has('ci-'+panel+'-'+item.id) ? ' sel' : ''}" id="ci-${panel}-${item.id}" data-label="${esc(item.label)}">
-      <div class="chk" onclick="selCustom(this,'${panel}')"></div>
-      <div class="item-text" onclick="selCustom(this.parentElement.querySelector('.chk'),'${panel}')">
+    <div class="custom-item${selIds.has('ci-'+panel+'-'+item.id) ? ' sel' : ''}" id="ci-${esc(panel)}-${esc(item.id)}" data-label="${esc(item.label)}">
+      <div class="chk" onclick="selCustom(this,${jsa(panel)})"></div>
+      <div class="item-text" onclick="selCustom(this.parentElement.querySelector('.chk'),${jsa(panel)})">
         <div class="item-name">${esc(item.label)}</div>
       </div>
       <span class="custom-badge">CUSTOM</span>
-      <button class="btn-del-item" onclick="deleteCustomItem('${panel}',${item.id})" title="Eliminar ítem">✕</button>
+      <button class="btn-del-item" onclick="deleteCustomItem(${jsa(panel)},${jsa(item.id)})" title="Eliminar ítem">✕</button>
     </div>`).join('');
 }
 
@@ -1442,9 +1472,11 @@ function selCustom(chkEl, panel) {
 }
 
 function esc(s) {
-  if (!s) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  if (s==null || s==='') return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
 }
+
+function jsa(v) { return esc(JSON.stringify(v==null?null:v)); }
 
 // ── BUILD DYNAMIC TABS & PANELS ──
 function buildDynamicTabs() {
@@ -1496,7 +1528,7 @@ function buildDynamicTabs() {
         </div>
         <div class="items-list">
           ${svc.options.map(opt => `
-            <div class="item" onclick="sel(this,'${tid}')" data-label="${esc(opt)}">
+            <div class="item" onclick="sel(this,${jsa(tid)})" data-label="${esc(opt)}">
               <div class="chk"></div>
               <div class="item-text"><div class="item-name">${esc(opt)}</div></div>
               <span class="item-tag tag-c">OPC</span>
@@ -1504,7 +1536,7 @@ function buildDynamicTabs() {
         </div>
       </div>
       <div class="add-item-sect" id="custom-sect-${tid}">
-        <div class="add-item-head" onclick="toggleAddForm('${tid}')">
+        <div class="add-item-head" onclick="toggleAddForm(${jsa(tid)})">
           <div class="add-item-toggle">+</div>
           <div class="add-item-label">Agregar ítem personalizado</div>
           <div class="add-item-count" id="custom-count-${tid}">0 personalizados</div>
@@ -1512,7 +1544,7 @@ function buildDynamicTabs() {
         <div class="add-item-form" id="add-form-${tid}">
           <div class="add-item-inputs">
             <input id="custom-input-${tid}" placeholder="Escribe una opción extra" maxlength="80">
-            <button class="btn-add-item" onclick="addCustomItem('${tid}')">+ Agregar</button>
+            <button class="btn-add-item" onclick="addCustomItem(${jsa(tid)})">+ Agregar</button>
           </div>
           <div class="custom-items-list" id="custom-list-${tid}"></div>
         </div>
@@ -1522,8 +1554,8 @@ function buildDynamicTabs() {
         <div class="field-g"><textarea id="${tid}_notas" rows="2" placeholder="Detalles extra..."></textarea></div>
       </div>
       <div class="action-row">
-        <button class="reset-btn" onclick="resetPanel('${tid}')">🔄 Limpiar</button>
-        <button class="reset-btn" style="color:var(--orange);border-color:var(--orange)" onclick="deleteServiceFromTab(${svc.id})">🗑 Eliminar servicio</button>
+        <button class="reset-btn" onclick="resetPanel(${jsa(tid)})">🔄 Limpiar</button>
+        <button class="reset-btn" style="color:var(--orange);border-color:var(--orange)" onclick="deleteServiceFromTab(${jsa(svc.id)})">🗑 Eliminar servicio</button>
       </div>
       <div style="height:80px"></div>`;
     const agregarPanel = document.getElementById('panel-agregar');
@@ -1768,7 +1800,7 @@ function renderSavedList() {
           <div class="saved-item-name">${esc(s.icon)} ${esc(s.name)}</div>
           <div class="saved-item-count">${s.options.length} opción(es)</div>
         </div>
-        <button class="del-btn" onclick="deleteService(${s.id})">🗑</button>
+        <button class="del-btn" onclick="deleteService(${jsa(s.id)})">🗑</button>
       </div>`).join('');
 }
 
@@ -1804,6 +1836,39 @@ function loadFinHistorial() {
 function saveFinHistorial(arr) {
   localStorage.setItem('fin_historial', JSON.stringify(arr));
   _syncFinToFirebase();
+}
+
+// Fusiona el mes actual de dos dispositivos sin perder movimientos.
+// Antes ganaba "el que tuviera más movimientos" y el documento entero
+// reemplazaba al otro: si A registraba 2 y B 3 distintos, se perdían los 2
+// de A. Ahora se unen los movimientos y los totales se ajustan sumando
+// solo lo que faltaba en el lado base.
+//   - clearTs: "Resetear flujo" (borra movimientos) — se descarta todo lo anterior.
+//   - movimiento tipo 'reset': "Reiniciar mes" — los totales vuelven a 0 desde ahí.
+function _claveMov(m) { return [m.id, m.tipo, m.monto, m.desc].join('|'); }
+function _ultimoReset(c) {
+  return Math.max(c.clearTs || 0, ...(c.movimientos||[]).filter(m => m.tipo === 'reset').map(m => m.id || 0));
+}
+function mergeFinCurrent(local, remoto) {
+  if (!local || !local.mes) return remoto;
+  if (!remoto || !remoto.mes) return local;
+  if (local.mes !== remoto.mes) return local.mes > remoto.mes ? local : remoto;
+  const rL = _ultimoReset(local), rR = _ultimoReset(remoto);
+  const base = rR > rL ? remoto : local;
+  const otro = base === local ? remoto : local;
+  const corte = Math.max(rL, rR);
+  const clearTs = Math.max(local.clearTs || 0, remoto.clearTs || 0);
+  const enBase = new Set((base.movimientos||[]).map(_claveMov));
+  const faltantes = (otro.movimientos||[]).filter(m => !enBase.has(_claveMov(m)) && (m.id||0) > clearTs);
+  let ganancia = base.ganancia || 0, inversion = base.inversion || 0;
+  faltantes.forEach(m => {
+    if ((m.id||0) <= corte) return;
+    if (m.tipo === 'ganancia') ganancia += m.monto || 0;
+    else if (m.tipo === 'inversion') inversion += m.monto || 0;
+  });
+  const movimientos = [...(base.movimientos||[]).filter(m => (m.id||0) > clearTs || m.tipo === 'reset'), ...faltantes]
+    .sort((a,b) => (b.id||0) - (a.id||0)).slice(0, 200);
+  return { ...base, clearTs, ganancia, inversion, movimientos };
 }
 
 // Sube finanzas a Firebase con debounce para agrupar escrituras rápidas
@@ -1918,7 +1983,7 @@ function renderFinanceDashboard() {
         <div class="mov-dot ${dotClass}"></div>
         <div class="mov-info">
           <div class="mov-desc">${esc(m.desc)}</div>
-          <div class="mov-fecha">${m.fecha||''}</div>
+          <div class="mov-fecha">${esc(m.fecha)}</div>
         </div>
         ${montoTxt}
       </div>`;
@@ -1936,7 +2001,7 @@ function resetFlujoDinero() {
     'Se borrarán ganancias, inversiones y movimientos del mes actual. El historial de meses anteriores NO se modifica.',
     () => {
       const currentKey = getCurrentMonthKey();
-      saveFinCurrent({mes: currentKey, ganancia: 0, inversion: 0, movimientos: []});
+      saveFinCurrent({mes: currentKey, ganancia: 0, inversion: 0, movimientos: [], clearTs: Date.now()});
       renderFinanceDashboard();
     }
   );
@@ -1981,7 +2046,7 @@ function renderHistorico() {
           </div>
         </div>
         ${resetInfo}
-        <button class="btn-rst-hist" onclick="pedirResetMesHistorial('${h.mes}')">🔄 Reiniciar efectivo de ${formatMes(h.mes)}</button>
+        <button class="btn-rst-hist" onclick="pedirResetMesHistorial(${jsa(h.mes)})">🔄 Reiniciar efectivo de ${formatMes(h.mes)}</button>
       </div>`;
   }).join('');
 }
@@ -2195,17 +2260,14 @@ function initFirebase() {
     const localCurrent = loadFinCurrent();
     const localHist = loadFinHistorial();
 
-    // Mes actual: tomar el más reciente; si es el mismo mes, el que tiene más movimientos
+    // Mes actual: unir movimientos de ambos lados (ver mergeFinCurrent)
     if (data.current && data.current.mes) {
-      const fbMes = data.current.mes;
-      const localMes = localCurrent ? localCurrent.mes : '';
-      const mismoMes = fbMes === localMes;
-      const fbMasMovs = (data.current.movimientos||[]).length >= (localCurrent ? (localCurrent.movimientos||[]).length : 0);
-      if (!localMes || fbMes > localMes || (mismoMes && fbMasMovs)) {
-        localStorage.setItem('fin_current', JSON.stringify(data.current));
-      } else if (mismoMes && !fbMasMovs) {
-        // Local tiene más datos del mismo mes → subir a Firebase
-        _syncFinToFirebase();
+      const fusion = mergeFinCurrent(localCurrent, data.current);
+      if (JSON.stringify(fusion) !== JSON.stringify(localCurrent)) {
+        localStorage.setItem('fin_current', JSON.stringify(fusion));
+      }
+      if (JSON.stringify(fusion) !== JSON.stringify(data.current)) {
+        _syncFinToFirebase(); // el servidor no tiene todo lo de este dispositivo
       }
     }
 
@@ -2267,8 +2329,11 @@ window.addEventListener('fbReady', () => {
   initFirebase();
 });
 setTimeout(() => {
-  if (!fbInitDone) { fbInitDone = true; initFirebase(); }
+  if (!fbInitDone && !window._authPendiente) { fbInitDone = true; initFirebase(); }
 }, 300);
+setTimeout(() => {
+  if (!fbInitDone && !window._firebaseInitRan) { fbInitDone = true; initFirebase(); }
+}, 8000);
 
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;

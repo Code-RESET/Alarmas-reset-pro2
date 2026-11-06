@@ -24,8 +24,11 @@ function guardarGastosLocal() {
 async function cargarGastos() {
   if (window._useFirebase && window._firebaseDb && window._firebaseModules && window._uid) {
     try {
-      const { onSnapshot, orderBy, query } = window._firebaseModules;
-      const q = query(window.colGastos(), orderBy('fecha','desc'));
+      const { onSnapshot, orderBy, query, where } = window._firebaseModules;
+      // Solo los últimos 12 meses: la app usa los gastos del mes actual y la
+      // lista reciente; antes el listener leía todo el historial en cada carga.
+      const desde = new Date(); desde.setMonth(desde.getMonth() - 12); desde.setDate(1); desde.setHours(0,0,0,0);
+      const q = query(window.colGastos(), where('fecha', '>=', desde.getTime()), orderBy('fecha','desc'));
       if (!gastosListenerStarted) {
         gastosListenerStarted = true;
         _unsubGastos = onSnapshot(q, snap => {
@@ -48,13 +51,16 @@ async function guardarGasto(gasto) {
   const data = {...gasto};
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
-      const { addDoc, updateDoc } = window._firebaseModules;
+      const { setDoc, updateDoc } = window._firebaseModules;
       if (data.id) {
         const id = data.id; delete data.id;
-        await updateDoc(window.docGasto(id), data);
+        await window._fsEscribir(updateDoc(window.docGasto(id), data));
         return id;
       } else {
-        const ref = await addDoc(window.colGastos(), data);
+        // ID generado localmente: funciona igual sin señal (queda en la
+        // cola persistente de Firestore) en vez de quedarse esperando.
+        const ref = window.nuevoDoc(window.colGastos());
+        await window._fsEscribir(setDoc(ref, data));
         return ref.id;
       }
     } catch(e) {
@@ -81,7 +87,7 @@ async function eliminarGasto(id) {
   if (window._useFirebase && window._firebaseDb && window._uid) {
     try {
       const { deleteDoc } = window._firebaseModules;
-      await deleteDoc(window.docGasto(id));
+      await window._fsEscribir(deleteDoc(window.docGasto(id)));
       window.toast('Gasto eliminado');
     } catch(e) {
       console.error(e);
