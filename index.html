@@ -537,6 +537,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-si
     <div class="stat-card yellow" onclick="irADashCard('todos')"><div class="stat-label">Facturado</div><div class="stat-value" id="stat-total">$0</div></div>
     <div class="stat-card red" onclick="irADashCard('POR_COBRAR')"><div class="stat-label">Órdenes Pend.</div><div class="stat-value" id="stat-ordpend">0</div></div>
     <div class="stat-card yellow" onclick="irADashCard('todos')"><div class="stat-label">Facturado (mes)</div><div class="stat-value" id="stat-facturado-mes">$0</div></div>
+    <div class="stat-card orange" onclick="navTo('gastos')"><div class="stat-label">Inversión real (mes)</div><div class="stat-value" id="stat-inversion-real">$0</div></div>
     <div class="stat-card red" onclick="navTo('gastos')"><div class="stat-label">Gastos del mes</div><div class="stat-value" id="stat-gastos-mes">$0</div></div>
     <div class="stat-card green" onclick="navTo('gastos')"><div class="stat-label">Ganancia neta (mes)</div><div class="stat-value" id="stat-ganancia-neta">$0</div></div>
   </div>
@@ -925,6 +926,28 @@ function _gastosDelMesActual() {
   return (window.gastos||[]).filter(g => _mesDeFecha(g.fecha) === mesActual)
     .reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
 }
+// Inversión capturada por servicio al crear/editar cada orden (campo
+// "inversión" de cada producto) — distinta de los Gastos generales
+// (herramientas, cable, etc. no ligados a una orden puntual).
+function _inversionProductosDelMesActual() {
+  const mesActual = _getMesActual();
+  let inv = 0;
+  ordenes.forEach(o => {
+    const fechaOrden = o.fecha_instalacion || (o.fecha_creacion ? fechaLocalISO(o.fecha_creacion) : '');
+    if ((fechaOrden||'').slice(0,7) !== mesActual) return;
+    inv += (o.productos||[]).reduce((s,p)=>s+(parseFloat(p.inversion)||0),0);
+  });
+  return inv;
+}
+// Inversión real del mes = lo invertido por servicio + lo comprado aparte
+// en Gastos generales. "Ganancia neta (mes)" ya restaba ambas por separado
+// (_gananciaDelMesActual() ya descuenta la inversión por servicio, y luego
+// se le resta Gastos del mes) — esta función solo hace visible esa suma
+// combinada para que Facturado(mes) − Inversión real(mes) = Ganancia neta(mes)
+// se pueda verificar a simple vista en el Dashboard.
+function _inversionRealDelMesActual() {
+  return _inversionProductosDelMesActual() + _gastosDelMesActual();
+}
 // "Facturado" del dashboard suma TODAS las órdenes activas sin filtrar por
 // fecha (igual que _calcFinancialSummary, sin tocarla) — por eso el día 1
 // de un mes nuevo sigue mostrando montos grandes que en realidad son deuda
@@ -945,10 +968,12 @@ function actualizarResumenGastosMes() {
   const elG = document.getElementById('stat-gastos-mes');
   const elN = document.getElementById('stat-ganancia-neta');
   const elF = document.getElementById('stat-facturado-mes');
+  const elI = document.getElementById('stat-inversion-real');
   const elTotalTab = document.getElementById('gastos-total-mes');
   if (elG) elG.textContent = fmt(gastosMes);
   if (elN) elN.textContent = fmt(_gananciaDelMesActual() - gastosMes);
   if (elF) elF.textContent = fmt(_facturadoDelMesActual());
+  if (elI) elI.textContent = fmt(_inversionRealDelMesActual());
   if (elTotalTab) elTotalTab.textContent = 'Total este mes: ' + fmt(gastosMes);
 }
 
