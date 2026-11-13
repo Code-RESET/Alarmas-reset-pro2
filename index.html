@@ -532,13 +532,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-si
 <!-- DASHBOARD -->
 <div class="view active" id="tab-dashboard">
   <div class="dash-grid">
-    <div class="stat-card green" onclick="irADashCard('todos')"><div class="stat-label">Ganancia Total</div><div class="stat-value" id="stat-ganancia">$0</div></div>
     <div class="stat-card orange" onclick="irADashCard('POR_COBRAR')"><div class="stat-label">Por Cobrar</div><div class="stat-value" id="stat-pendiente">$0</div></div>
-    <div class="stat-card yellow" onclick="irADashCard('todos')"><div class="stat-label">Facturado</div><div class="stat-value" id="stat-total">$0</div></div>
     <div class="stat-card red" onclick="irADashCard('POR_COBRAR')"><div class="stat-label">Órdenes Pend.</div><div class="stat-value" id="stat-ordpend">0</div></div>
     <div class="stat-card yellow" onclick="irADashCard('todos')"><div class="stat-label">Facturado (mes)</div><div class="stat-value" id="stat-facturado-mes">$0</div></div>
     <div class="stat-card orange" onclick="navTo('gastos')"><div class="stat-label">Inversión real (mes)</div><div class="stat-value" id="stat-inversion-real">$0</div></div>
-    <div class="stat-card red" onclick="navTo('gastos')"><div class="stat-label">Gastos del mes</div><div class="stat-value" id="stat-gastos-mes">$0</div></div>
     <div class="stat-card green" onclick="navTo('gastos')"><div class="stat-label">Ganancia neta (mes)</div><div class="stat-value" id="stat-ganancia-neta">$0</div></div>
   </div>
   <div class="historial-section" id="historial-section" style="display:none">
@@ -965,12 +962,10 @@ function _facturadoDelMesActual() {
 }
 function actualizarResumenGastosMes() {
   const gastosMes = _gastosDelMesActual();
-  const elG = document.getElementById('stat-gastos-mes');
   const elN = document.getElementById('stat-ganancia-neta');
   const elF = document.getElementById('stat-facturado-mes');
   const elI = document.getElementById('stat-inversion-real');
   const elTotalTab = document.getElementById('gastos-total-mes');
-  if (elG) elG.textContent = fmt(gastosMes);
   if (elN) elN.textContent = fmt(_gananciaDelMesActual() - gastosMes);
   if (elF) elF.textContent = fmt(_facturadoDelMesActual());
   if (elI) elI.textContent = fmt(_inversionRealDelMesActual());
@@ -1386,12 +1381,10 @@ function showTab(id, btn) {
 // DASHBOARD
 // ═══════════════════════════════════════
 function renderDashboard() {
-  const {totalFac,totalGan,porCobrar} = _calcFinancialSummary(ordenes);
+  const {porCobrar} = _calcFinancialSummary(ordenes);
   let pend=0;
   ordenes.forEach(o=>{ const e=(o.estado||'').toUpperCase(); if(e==='PENDIENTE'||e==='EN_PROCESO') pend++; });
-  document.getElementById('stat-ganancia').textContent=fmt(totalGan);
   document.getElementById('stat-pendiente').textContent=fmt(porCobrar);
-  document.getElementById('stat-total').textContent=fmt(totalFac);
   document.getElementById('stat-ordpend').textContent=pend;
   actualizarResumenGastosMes();
   renderHistorialOrdenes();
